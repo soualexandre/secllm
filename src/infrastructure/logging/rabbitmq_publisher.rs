@@ -1,7 +1,7 @@
 //! Publish audit events to RabbitMQ with Publisher Confirms.
 
 use async_trait::async_trait;
-use lapin::{options::*, types::FieldTable, BasicProperties, Channel};
+use lapin::{options::BasicPublishOptions, options::ConfirmSelectOptions, BasicProperties, Channel};
 use std::sync::Arc;
 
 use crate::application::ports::LoggerPort;

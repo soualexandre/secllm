@@ -22,3 +22,4 @@ async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 regex = "1.10"
+futures-util = "0.3"
