@@ -1,0 +1,14 @@
+/Users/alexandresouza/Documents/training/secllm/target/debug/deps/serde-ee506e1101f6529d.d: /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/alexandresouza/Documents/training/secllm/target/debug/build/serde-1d84d94038952bdb/out/private.rs
+
+/Users/alexandresouza/Documents/training/secllm/target/debug/deps/libserde-ee506e1101f6529d.rlib: /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/alexandresouza/Documents/training/secllm/target/debug/build/serde-1d84d94038952bdb/out/private.rs
+
+/Users/alexandresouza/Documents/training/secllm/target/debug/deps/libserde-ee506e1101f6529d.rmeta: /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/alexandresouza/Documents/training/secllm/target/debug/build/serde-1d84d94038952bdb/out/private.rs
+
+/Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/alexandresouza/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/alexandresouza/Documents/training/secllm/target/debug/build/serde-1d84d94038952bdb/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/alexandresouza/Documents/training/secllm/target/debug/build/serde-1d84d94038952bdb/out
