@@ -3,11 +3,11 @@
 use std::sync::Arc;
 
 use lapin::{Connection, ConnectionProperties};
+use sqlx::postgres::PgPoolOptions;
 use secllm::config::Config;
 use secllm::domain::GovernancePolicy;
 use secllm::infrastructure::http::{router, AppState};
-use secllm::infrastructure::logging::rabbitmq_publisher::RabbitMqPublisher;
-use secllm::infrastructure::logging::worker::clickhouse_writer::{run_worker, WorkerConfig};
+use secllm::infrastructure::logging::{worker, RabbitMqPublisher};
 use secllm::infrastructure::privacy::PrivacyService;
 use secllm::infrastructure::proxy::ReqwestDispatcher;
 use secllm::infrastructure::vault::RedisVault;
@@ -24,6 +24,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let governance = GovernancePolicy::default_strict();
     let privacy = Arc::new(PrivacyService::new(governance.clone()));
 
+    let postgres = match config.postgres.as_ref().filter(|p| !p.url.is_empty()) {
+        Some(p) => Some(PgPoolOptions::new().connect(&p.url).await?),
+        None => None,
+    };
+
     let conn = Connection::connect(&config.rabbitmq.url, ConnectionProperties::default()).await?;
     let channel = conn.create_channel().await?;
     RabbitMqPublisher::enable_confirms(&channel).await?;
@@ -39,9 +44,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         proxy,
         privacy,
         governance,
+        postgres,
     });
 
-    let worker_config = WorkerConfig {
+    let worker_config = worker::WorkerConfig {
         amqp_url: config.rabbitmq.url.clone(),
         queue: config.rabbitmq.audit_queue.clone(),
         clickhouse_url: config.clickhouse.url.clone(),
@@ -51,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         batch_max_latency_ms: config.logging_worker.batch_max_latency_ms,
     };
     tokio::spawn(async move {
-        if let Err(e) = run_worker(worker_config).await {
+        if let Err(e) = worker::run_worker(worker_config).await {
             eprintln!("audit worker error: {}", e);
         }
     });

@@ -4,6 +4,8 @@ use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
 };
+use std::future::Future;
+use std::pin::Pin;
 use uuid::Uuid;
 
 use crate::domain::RequestContext;
@@ -18,13 +20,23 @@ where
 {
     type Rejection = (StatusCode, &'static str);
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let ctx = parts
-            .extensions
-            .get::<RequestContext>()
-            .cloned()
-            .ok_or((StatusCode::UNAUTHORIZED, "missing request context"))?;
-        Ok(Context(ctx))
+    fn from_request_parts<'a, 'b, 'async_trait>(
+        parts: &'a mut Parts,
+        _state: &'b S,
+    ) -> Pin<Box<dyn Future<Output = Result<Self, Self::Rejection>> + Send + 'async_trait>>
+    where
+        'a: 'async_trait,
+        'b: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            let ctx = parts
+                .extensions
+                .get::<RequestContext>()
+                .cloned()
+                .ok_or((StatusCode::UNAUTHORIZED, "missing request context"))?;
+            Ok(Context(ctx))
+        })
     }
 }
 

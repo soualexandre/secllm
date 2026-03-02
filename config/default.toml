@@ -16,6 +16,9 @@ url = "http://127.0.0.1:8123"
 database = "secllm"
 audit_table = "audit_events"
 
+[postgres]
+url = "postgres://127.0.0.1:5432/secllm"
+
 [jwt]
 secret = "change-me-in-production"
 # issuer = "secllm"

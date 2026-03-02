@@ -4,4 +4,4 @@ mod batch;
 mod clickhouse_writer;
 
 pub use batch::DynamicBatch;
-pub use clickhouse_writer::run_worker;
+pub use clickhouse_writer::{run_worker, WorkerConfig};

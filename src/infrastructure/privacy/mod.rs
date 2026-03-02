@@ -3,9 +3,8 @@
 mod detector;
 mod masker;
 
-use crate::domain::{GovernancePolicy, MaskedSpan, PiiKind, PiiMatch};
+use crate::domain::{GovernancePolicy, MaskedSpan, PiiMatch};
 use crate::Result;
-use std::sync::Arc;
 
 pub use detector::PiiDetector;
 pub use masker::apply_masks;
@@ -28,7 +27,7 @@ impl PrivacyService {
         let matches = self.detector.detect(text);
         let filtered: Vec<PiiMatch> = matches
             .into_iter()
-            .filter(|m| self.policy.should_mask(m.kind))
+            .filter(|m| self.policy.should_mask(m.kind.clone()))
             .collect();
         let masked = apply_masks(text, &filtered);
         let spans: Vec<MaskedSpan> = filtered

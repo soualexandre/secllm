@@ -8,9 +8,16 @@ pub struct Config {
     pub redis: RedisConfig,
     pub rabbitmq: RabbitMqConfig,
     pub clickhouse: ClickHouseConfig,
+    #[serde(default)]
+    pub postgres: Option<PostgresConfig>,
     pub jwt: JwtConfig,
     pub llm: LlmConfig,
     pub logging_worker: LoggingWorkerConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PostgresConfig {
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

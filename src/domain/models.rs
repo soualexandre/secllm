@@ -8,9 +8,12 @@ use uuid::Uuid;
 #[derive(Clone, Debug)]
 pub struct RequestContext {
     pub request_id: Uuid,
+    /// For client tokens: the client_id. For user tokens (scope set): the user_id (sub).
     pub client_id: String,
     pub api_key: String,
     pub provider: LlmProvider,
+    /// When set, token is a user token (sub = user_id). When None, token is client_credentials (sub = client_id).
+    pub scope: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

@@ -8,6 +8,21 @@ use crate::Result;
 #[async_trait]
 pub trait VaultPort: Send + Sync {
     async fn get_api_key(&self, client_id: &str, provider: &str) -> Result<String>;
+
+    /// Client secret for authenticating and issuing JWT (e.g. Redis key secllm:auth:{client_id}).
+    async fn get_client_secret(&self, client_id: &str) -> Result<Option<String>>;
+
+    /// Replicate API key to Redis (after persisting in Postgres). Used by admin API.
+    async fn set_api_key(&self, client_id: &str, provider: &str, api_key: &str) -> Result<()>;
+
+    /// Remove API key from Redis (after deleting from Postgres).
+    async fn del_api_key(&self, client_id: &str, provider: &str) -> Result<()>;
+
+    /// Replicate client secret to Redis (after persisting in Postgres).
+    async fn set_client_secret(&self, client_id: &str, secret: &str) -> Result<()>;
+
+    /// Remove client secret from Redis.
+    async fn del_client_secret(&self, client_id: &str) -> Result<()>;
 }
 
 /// Publish audit event and wait for broker confirm (Publisher Confirms).

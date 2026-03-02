@@ -67,12 +67,6 @@ impl ProxyPort for ReqwestDispatcher {
             .await
             .map_err(|e| crate::AppError::Proxy(e.to_string()))?;
         let status = resp.status().as_u16();
-        let body_bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| crate::AppError::Proxy(e.to_string()))?
-            .to_vec();
-
         let prompt_tokens = resp
             .headers()
             .get("openai-usage-prompt-tokens")
@@ -85,6 +79,11 @@ impl ProxyPort for ReqwestDispatcher {
             .or_else(|| resp.headers().get("x-completion-tokens"))
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse().ok());
+        let body_bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| crate::AppError::Proxy(e.to_string()))?
+            .to_vec();
 
         Ok((status, body_bytes, prompt_tokens, completion_tokens))
     }

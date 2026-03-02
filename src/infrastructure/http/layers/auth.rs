@@ -8,19 +8,23 @@ use axum::{
 };
 use chrono::Utc;
 use jsonwebtoken::{decode, DecodingKey, Validation};
-use uuid::Uuid;
-
 use crate::domain::{LlmProvider, RequestContext};
-use crate::error::AppError;
 use crate::infrastructure::http::extractors::request_id_from_parts;
 
-/// JWT claims we expect (client_id, provider).
-#[derive(Debug, serde::Deserialize)]
+/// JWT claims we expect (client_id or user_id, provider, optional scope). Used for decode and encode.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Claims {
     pub sub: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// For user tokens: "admin" | "user". Absent for client_credentials tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     pub exp: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iat: Option<i64>,
 }
 
 pub async fn auth_layer(
@@ -28,6 +32,9 @@ pub async fn auth_layer(
     next: Next,
 ) -> Result<Response, (StatusCode, String)> {
     let (mut parts, body) = request.into_parts();
+    if parts.uri.path() == "/" {
+        return Ok(next.run(Request::from_parts(parts, body)).await);
+    }
     let request_id = request_id_from_parts(&parts);
 
     let auth_header = parts
@@ -68,6 +75,7 @@ pub async fn auth_layer(
         client_id,
         api_key: String::new(),
         provider,
+        scope: token_data.claims.scope.clone(),
         created_at: Utc::now(),
     };
     parts.extensions.insert(ctx);

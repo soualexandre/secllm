@@ -50,12 +50,15 @@ O SecLLM utiliza **Arquitetura Hexagonal (Clean Architecture)** para garantir qu
     cd secllm
     ```
 
-2.  **Suba a infraestrutura (Redis, RabbitMQ, ClickHouse):**
+2.  **Suba toda a stack (Redis, RabbitMQ, ClickHouse e SecLLM) com Docker:**
     ```bash
-    docker-compose up -d
+    docker compose up -d --build
     ```
+    A API ficará em **http://localhost:3000**. Detalhes (incl. como configurar chaves no Redis) em [docker/README.md](docker/README.md).
 
-3.  **Configure o ambiente:**
+    *Alternativa:* subir só a infraestrutura com `docker compose up -d redis rabbitmq clickhouse` e rodar a aplicação localmente com `cargo run`.
+
+3.  **Configure o ambiente (se rodar a app fora do Docker):**
     Crie um arquivo `.env` na raiz:
     ```env
     SERVER_ADDR=0.0.0.0:3000

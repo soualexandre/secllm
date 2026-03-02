@@ -1,14 +1,13 @@
 //! Vault layer: resolve API key from vault (Redis) and set full RequestContext.
 
 use axum::{
+    extract::Request,
     extract::State,
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
-    Request,
 };
-use crate::domain::RequestContext;
-use crate::error::AppError;
+use crate::domain::{LlmProvider, RequestContext};
 use crate::infrastructure::http::state::AppState;
 
 pub async fn vault_layer(
@@ -17,6 +16,9 @@ pub async fn vault_layer(
     next: Next,
 ) -> Result<Response, Response> {
     let (mut parts, body) = request.into_parts();
+    if parts.uri.path() == "/" {
+        return Ok(next.run(Request::from_parts(parts, body)).await);
+    }
     let ctx = parts
         .extensions
         .get::<RequestContext>()
@@ -24,8 +26,8 @@ pub async fn vault_layer(
         .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "missing auth context").into_response())?;
 
     let provider_str = match ctx.provider {
-        crate::domain::LlmProvider::OpenAI => "openai",
-        crate::domain::LlmProvider::Anthropic => "anthropic",
+        LlmProvider::OpenAI => "openai",
+        LlmProvider::Anthropic => "anthropic",
     };
     let api_key = state
         .vault

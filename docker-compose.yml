@@ -1,0 +1,144 @@
+# SecLLM – Redis, RabbitMQ, ClickHouse e aplicação Rust
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: secllm-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: secllm-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./docker/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./docker/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Carrega exchange/queue na subida (definitions.json)
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    platform: linux/amd64
+    container_name: secllm-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      CLICKHOUSE_DB: secllm
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    cap_add:
+      - SYS_NICE
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: secllm-postgres
+    environment:
+      POSTGRES_USER: secllm
+      POSTGRES_PASSWORD: secllm
+      POSTGRES_DB: secllm
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secllm -d secllm"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  clickhouse-init:
+    image: curlimages/curl:latest
+    container_name: secllm-clickhouse-init
+    depends_on:
+      clickhouse:
+        condition: service_started
+    volumes:
+      - ./docker/clickhouse/init.sql:/init.sql:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "Waiting for ClickHouse HTTP..."
+        for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+          if curl -sf "http://clickhouse:8123/ping" >/dev/null; then break; fi
+          echo "Attempt $$i/15..."
+          sleep 4
+        done
+        curl -sf "http://clickhouse:8123/ping" || exit 1
+        echo "Creating database and audit_events table..."
+        curl -s "http://clickhouse:8123/" --data "CREATE DATABASE IF NOT EXISTS secllm"
+        curl -s "http://clickhouse:8123/" --data-binary @/init.sql
+        echo "ClickHouse init done."
+    restart: "no"
+
+  secllm:
+    build: .
+    image: secllm:latest
+    container_name: secllm-app
+    ports:
+      - "3000:3000"
+    environment:
+      SECLLM__SERVER__HOST: "0.0.0.0"
+      SECLLM__SERVER__PORT: "3000"
+      SECLLM__REDIS__URL: "redis://redis:6379"
+      SECLLM__RABBITMQ__URL: "amqp://secllm:secllm@rabbitmq:5672/%2f"
+      SECLLM__RABBITMQ__AUDIT_EXCHANGE: "secllm.audit"
+      SECLLM__RABBITMQ__AUDIT_QUEUE: "secllm.audit.logs"
+      SECLLM__RABBITMQ__AUDIT_ROUTING_KEY: "audit.log"
+      SECLLM__CLICKHOUSE__URL: "http://clickhouse:8123"
+      SECLLM__CLICKHOUSE__DATABASE: "secllm"
+      SECLLM__CLICKHOUSE__AUDIT_TABLE: "audit_events"
+      SECLLM__JWT__SECRET: "change-me-in-production"
+      SECLLM__LOGGING_WORKER__BATCH_MAX_SIZE: "100"
+      SECLLM__LOGGING_WORKER__BATCH_MAX_LATENCY_MS: "500"
+      SECLLM__POSTGRES__URL: "postgres://secllm:secllm@postgres:5432/secllm"
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
+      clickhouse-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  rabbitmq_data:
+  postgres_data:
+  clickhouse_data:

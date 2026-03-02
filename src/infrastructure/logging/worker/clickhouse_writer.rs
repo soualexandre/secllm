@@ -62,7 +62,7 @@ pub async fn run_worker(config: WorkerConfig) -> Result<(), Box<dyn std::error::
                         eprintln!("consumer error: {}", e);
                         continue;
                     }
-                    None => break,
+                    None => break Ok(()),
                 };
                 if let Ok(event) = serde_json::from_slice::<AuditEvent>(&delivery.data) {
                     batch.push(event);

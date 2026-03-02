@@ -14,7 +14,7 @@ static PHONE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\(?\d{2}\)?\s?\d{4,5}-?\d{4}\b").unwrap()
 });
 static SECRET_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(api[_-]?key|secret|password|token)\s*[:=]\s*['\"]?[\w-]{8,}['\"]?").unwrap()
+    Regex::new(r#"(?i)(api[_-]?key|secret|password|token)\s*[:=]\s*['"]?[\w-]{8,}['"]?"#).unwrap()
 });
 
 #[derive(Default)]

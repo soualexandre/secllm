@@ -42,7 +42,7 @@ impl LoggerPort for RabbitMqPublisher {
                 &self.exchange,
                 &self.routing_key,
                 BasicPublishOptions::default(),
-                payload,
+                &payload,
                 BasicProperties::default(),
             )
             .await

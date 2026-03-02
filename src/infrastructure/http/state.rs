@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use sqlx::PgPool;
 use crate::application::ports::{LoggerPort, PrivacyPort, ProxyPort, VaultPort};
 use crate::domain::GovernancePolicy;
 
@@ -12,4 +13,6 @@ pub struct AppState {
     pub proxy: Arc<dyn ProxyPort>,
     pub privacy: Arc<dyn PrivacyPort>,
     pub governance: GovernancePolicy,
+    /// Postgres pool for SSOT (auth, vault CRUD, governance, billing). None if not configured.
+    pub postgres: Option<PgPool>,
 }
