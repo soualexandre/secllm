@@ -120,7 +120,7 @@ O JWT (obtido via `/auth/token` ou gerado externamente) deve conter `client_id`/
 - **Porta:** 5432  
 - **Usuário / senha / database:** `secllm` / `secllm` / `secllm`  
 - **URL de conexão:** `postgres://secllm:secllm@localhost:5432/secllm`  
-- **Init:** na primeira subida, o Postgres executa os scripts em `docker/postgres/` em ordem (`01_schema.sql`, `02_rls.sql`), criando tabelas (users, clients, client_secrets, api_keys, governance_policies, billing_logs) e políticas RLS.
+- **Init:** na primeira subida, o Postgres executa os scripts em `docker/postgres/` em ordem (`01_schema.sql`, `02_rls.sql`, `03_add_gemini.sql`), criando tabelas e o enum `llm_provider` (openai, anthropic, gemini). Se o banco foi criado antes de existir `03_add_gemini.sql`, rode manualmente: `docker exec -i secllm-postgres psql -U secllm -d secllm < docker/postgres/03_add_gemini.sql` (ajuste o nome do container se necessário).
 
 ## Parar
 

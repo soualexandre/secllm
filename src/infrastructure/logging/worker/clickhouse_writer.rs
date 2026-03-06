@@ -54,7 +54,11 @@ async fn connect_amqp_with_retry(url: &str) -> Connection {
 pub async fn run_worker(config: WorkerConfig) -> ! {
     loop {
         if let Err(e) = run_worker_once(&config).await {
-            eprintln!("audit worker error (will reconnect in 5s): {}", e);
+            let msg = e.to_string();
+            eprintln!("audit worker error (will reconnect in 5s): {}", msg);
+            if msg.contains("lookup") || msg.contains("Name or service not known") || msg.contains("dns error") {
+                eprintln!("  Dica: se a aplicação roda no host (cargo run), use SECLLM__CLICKHOUSE__URL=http://127.0.0.1:8123");
+            }
             sleep(Duration::from_secs(5)).await;
         }
     }
@@ -96,20 +100,58 @@ async fn run_worker_once(config: &WorkerConfig) -> Result<(), Box<dyn std::error
                     let _ = delivery.ack(BasicAckOptions::default()).await;
                 }
                 if let Some(events) = batch.take_ready() {
-                    if let Err(e) = insert_batch(&client, &config.table, &events).await {
-                        eprintln!("clickhouse insert error: {}", e);
+                    if let Err(e) = insert_batch_with_retry(&client, &config.table, &events).await {
+                        eprintln!("clickhouse insert error (retries exhausted): {}", e);
+                        return Err(e);
                     }
                 }
             }
             _ = tick.tick() => {
                 if let Some(events) = batch.take_ready() {
-                    if let Err(e) = insert_batch(&client, &config.table, &events).await {
-                        eprintln!("clickhouse insert error: {}", e);
+                    if let Err(e) = insert_batch_with_retry(&client, &config.table, &events).await {
+                        eprintln!("clickhouse insert error (retries exhausted): {}", e);
+                        return Err(e);
                     }
                 }
             }
         }
     }
+}
+
+const INSERT_RETRIES: u32 = 5;
+const INSERT_RETRY_BASE: Duration = Duration::from_secs(1);
+
+/// Insert batch with retry on connection/DNS errors (e.g. "Name or service not known" at startup).
+async fn insert_batch_with_retry(
+    client: &clickhouse::Client,
+    table: &str,
+    events: &[AuditEvent],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if events.is_empty() {
+        return Ok(());
+    }
+    let mut backoff = INSERT_RETRY_BASE;
+    for attempt in 0..INSERT_RETRIES {
+        match insert_batch(client, table, events).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                let is_connection_error = msg.contains("lookup")
+                    || msg.contains("Name or service not known")
+                    || msg.contains("dns error")
+                    || msg.contains("connection")
+                    || msg.contains("timed out");
+                if attempt + 1 < INSERT_RETRIES && is_connection_error {
+                    eprintln!("clickhouse insert error (attempt {}/{}), retry in {:?}: {}", attempt + 1, INSERT_RETRIES, backoff, msg);
+                    sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(30));
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    unreachable!()
 }
 
 async fn insert_batch(

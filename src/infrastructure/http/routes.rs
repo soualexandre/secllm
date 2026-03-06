@@ -1306,9 +1306,21 @@ pub struct GatewayChatRequest {
     /// Temperatura 0.0–2.0 (opcional).
     #[serde(default)]
     pub temperature: Option<f32>,
-    /// Stream de chunks (opcional; no Swagger use false).
+    /// Stream de chunks. O gateway força stream=false ao encaminhar (não trata SSE); use false ou omita.
     #[serde(default)]
     pub stream: Option<bool>,
+}
+
+/// Body para POST /v1/responses (OpenAI Responses API). Suporta client_id e provider no body; são removidos ao encaminhar.
+#[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct GatewayResponsesRequest {
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub provider: Option<GatewayProvider>,
+    pub model: String,
+    /// Texto de entrada (formato da Responses API).
+    pub input: String,
 }
 
 /// Documentação OpenAPI do gateway (rota real é catch-all /*path).
@@ -1319,13 +1331,29 @@ pub struct GatewayChatRequest {
     request_body = GatewayChatRequest,
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Resposta repassada do provedor (OpenAI/Anthropic). Inclui choices[].message.content com o texto gerado."),
+        (status = 200, description = "Resposta repassada do provedor. O gateway força stream=false (não trata SSE)."),
         (status = 401, description = "Token ausente ou inválido"),
         (status = 403, description = "client_id do body não autorizado para este token"),
-        (status = 502, description = "Erro do provedor LLM ou API key não encontrada no cofre (configure client_id e provider com uma chave em Manage)")
+        (status = 502, description = "Erro do provedor LLM ou API key não encontrada no cofre")
     )
 )]
 pub fn proxy_handler_doc() {}
+
+/// Documentação OpenAPI para POST /v1/responses (OpenAI Responses API). Recomendado para modelos novos.
+#[utoipa::path(
+    post,
+    path = "/v1/responses",
+    tag = "5 - Gateway LLM",
+    request_body = GatewayResponsesRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Resposta repassada do provedor. Body: model + input; client_id e provider opcionais (removidos ao encaminhar). stream é forçado a false."),
+        (status = 401, description = "Token ausente ou inválido"),
+        (status = 403, description = "client_id do body não autorizado"),
+        (status = 502, description = "Erro do provedor LLM")
+    )
+)]
+pub fn proxy_handler_responses_doc() {}
 
 async fn proxy_handler(
     State(state): State<Arc<AppState>>,
@@ -1341,21 +1369,16 @@ async fn proxy_handler(
         .map(|p| p.as_str())
         .unwrap_or(path);
 
-    let (client_id_for_vault, provider_override, body_to_forward) = if method == Method::POST
-        && (path.contains("chat/completions") || path.ends_with("completions"))
-    {
-        if let Ok(parsed) = serde_json::from_slice::<GatewayChatRequest>(&body) {
-            let client_id_override = parsed
-                .client_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from);
-            let provider_override = parsed.provider.map(|p| p.as_str().to_string());
-            let body_clean = strip_gateway_params_from_json(&body);
-            (client_id_override, provider_override, body_clean.unwrap_or(body.to_vec()))
+    let is_gateway_llm = method == Method::POST
+        && (path.contains("chat/completions") || path.contains("/v1/responses") || path.ends_with("completions"));
+
+    let (client_id_for_vault, provider_override, body_to_forward) = if is_gateway_llm {
+        if let Some((cid, prov, body_clean)) = normalize_gateway_body(&body) {
+            let provider_override = prov.and_then(|p| parse_provider(&p).map(|x| x.as_str().to_string()));
+            (cid, provider_override, body_clean)
         } else {
-            (None, None, body.to_vec())
+            let with_stream_false = force_stream_false(&body).unwrap_or_else(|| body.to_vec());
+            (None, None, with_stream_false)
         }
     } else {
         (None, None, body.to_vec())
@@ -1439,11 +1462,33 @@ async fn proxy_handler(
     Ok((status, Bytes::from(body_bytes)))
 }
 
-/// Remove client_id and provider from the root of the JSON body so it can be forwarded to the LLM API (they are not part of the OpenAI/Anthropic payload).
-fn strip_gateway_params_from_json(body: &[u8]) -> Option<Vec<u8>> {
+/// Extract client_id and provider from JSON body (if present), remove them and force stream=false,
+/// so the body can be forwarded to the LLM API. The gateway does not handle SSE; stream=false avoids connection issues.
+fn normalize_gateway_body(body: &[u8]) -> Option<(Option<String>, Option<String>, Vec<u8>)> {
     let mut value: serde_json::Value = serde_json::from_slice(body).ok()?;
     let obj = value.as_object_mut()?;
+    let client_id = obj
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let provider = obj
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
     obj.remove("client_id");
     obj.remove("provider");
+    obj.insert("stream".to_string(), serde_json::json!(false));
+    serde_json::to_vec(&value).ok().map(|v| (client_id, provider, v))
+}
+
+/// Force stream=false in JSON body when normalize_gateway_body fails (e.g. non-object). Avoids SSE connection issues.
+fn force_stream_false(body: &[u8]) -> Option<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let obj = value.as_object_mut()?;
+    obj.insert("stream".to_string(), serde_json::json!(false));
     serde_json::to_vec(&value).ok()
 }

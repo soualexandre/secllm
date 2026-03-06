@@ -48,7 +48,7 @@ impl Modify for SecurityAddon {
         (name = "2 - Cofre (Vault)", description = "CRUD de chaves de API e client secrets"),
         (name = "3 - Governança", description = "Políticas global e por cliente (JSONB)"),
         (name = "4 - Faturamento", description = "Logs de faturamento por período"),
-        (name = "5 - Gateway LLM", description = "Proxy para OpenAI/Anthropic/Gemini. No body de POST /v1/chat/completions informe client_id (ID do app cuja API key usar) e provider (openai, anthropic ou gemini); o gateway busca no cofre a API key (client_id, provider) e repassa a chamada ao provedor. Token de app: pode omitir (usa client_id e provider do JWT). Token de usuário: informe client_id de um app que você possui com a chave configurada em Manage.")
+        (name = "5 - Gateway LLM", description = "Proxy para OpenAI/Anthropic/Gemini. Endpoints: POST /v1/chat/completions (legado) e POST /v1/responses (recomendado para modelos novos; body: model + input). No body opcional: client_id e provider; o gateway força stream=false (não trata SSE). Token de usuário: informe client_id de um app que você possui.")
     ),
     paths(
         routes::health,
@@ -68,7 +68,8 @@ impl Modify for SecurityAddon {
         routes::get_governance_client,
         routes::put_governance_client,
         routes::post_billing_log,
-        routes::proxy_handler_doc
+        routes::proxy_handler_doc,
+        routes::proxy_handler_responses_doc
     ),
     components(schemas(
         routes::AuthTokenRequest,
@@ -88,6 +89,7 @@ impl Modify for SecurityAddon {
         routes::GatewayChatRequest,
         routes::GatewayProvider,
         routes::GatewayModelEnum,
+        routes::GatewayResponsesRequest,
         ApiError
     )),
     modifiers(&SecurityAddon),

@@ -5,7 +5,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TYPE user_role AS ENUM ('user', 'admin');
 CREATE TYPE policy_scope AS ENUM ('global', 'client');
-CREATE TYPE llm_provider AS ENUM ('openai', 'anthropic');
+CREATE TYPE llm_provider AS ENUM ('openai', 'anthropic', 'gemini');
 
 -- Users (platform login)
 CREATE TABLE users (
