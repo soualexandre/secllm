@@ -34,11 +34,16 @@ impl VaultPort for RedisVault {
             .await
             .map_err(|e| crate::AppError::Vault(e.to_string()))?;
         let key = Self::key(client_id, provider);
-        let value: String = conn
+        let value: Option<String> = conn
             .get(&key)
             .await
             .map_err(|e| crate::AppError::Vault(e.to_string()))?;
-        Ok(value)
+        value.ok_or_else(|| {
+            crate::AppError::Vault(format!(
+                "API key not found for client_id={} provider={} (key {} not set in Redis)",
+                client_id, provider, key
+            ))
+        })
     }
 
     async fn get_client_secret(&self, client_id: &str) -> Result<Option<String>> {

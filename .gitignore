@@ -1,0 +1,33 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+
+# Config local (credenciais, overrides) – não versionar
+config/local.toml
+.env
+.env.*
+!.env.example
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs e artefatos
+*.log
+*.tmp
+*.temp
+
+# Docker (opcional: volumes locais; normalmente não versionados)
+# docker-volumes/
+
+# Testes / cobertura (se usar tarpaulin, cargo-llvm-cov)
+coverage/
+*.profraw
+*.profdata

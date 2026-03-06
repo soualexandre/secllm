@@ -76,7 +76,8 @@ impl Modify for SecurityAddon {
         routes::PostBillingLogBody,
         ApiError
     )),
-    modifiers(&SecurityAddon)
+    modifiers(&SecurityAddon),
+    security(("bearer_auth" = []))
 )]
 pub struct ApiDoc;
 

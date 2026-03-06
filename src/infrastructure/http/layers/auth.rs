@@ -75,7 +75,7 @@ pub async fn auth_layer(
     validation.validate_exp = true;
 
     let token_data = decode::<Claims>(token, &key, &validation)
-        .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid or expired token".into()))?;
+        .map_err(|e| (StatusCode::UNAUTHORIZED, format!("invalid or expired token: {}", e)))?;
 
     let client_id = token_data.claims.client_id
         .or(Some(token_data.claims.sub))

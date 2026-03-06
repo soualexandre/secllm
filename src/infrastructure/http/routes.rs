@@ -3,8 +3,8 @@
 use axum::{
     extract::{Path as AxumPath, State},
     http::{HeaderMap, Method, StatusCode, Uri},
-    response::{IntoResponse, Redirect},
-    routing::{any, get, post, put},
+    response::IntoResponse,
+    routing::{any, post, put},
     Json, Router,
 };
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -20,7 +20,7 @@ use utoipa::OpenApi;
 
 use crate::application::pipeline;
 use crate::error::AppError;
-use crate::infrastructure::http::openapi::{self, ApiDoc};
+use crate::infrastructure::http::openapi::ApiDoc;
 use crate::infrastructure::http::extractors::Context;
 use crate::infrastructure::http::layers::auth::Claims;
 use crate::infrastructure::http::state::AppState;
@@ -88,7 +88,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let users_public = Router::new().route("/register", post(register_user));
 
     // Swagger UI (utoipa + utoipa-swagger-ui): público; spec em /api-docs/openapi.json
-    let swagger_config = Config::from("/api-docs/openapi.json");
+    let swagger_config = Config::from("/api-docs/openapi.json").persist_authorization(true);
     let swagger_ui = SwaggerUi::new("/swagger-ui")
         .url("/api-docs/openapi.json", ApiDoc::openapi())
         .config(swagger_config);
@@ -98,8 +98,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/auth/token", post(auth_token))
         .route("/auth/register", post(register_user))
         .nest("/api/users", users_public)
-        .route("/api-docs/openapi.json", get(openapi::serve_openapi_json))
-        .route("/swagger-ui", get(redirect_swagger_trailing_slash))
         .nest("/api/v1", api_routes)
         .merge(swagger_ui)
         .merge(proxy_routes)
@@ -116,6 +114,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         (status = 401, description = "Invalid credentials", body = crate::infrastructure::http::openapi::ApiError),
         (status = 503, description = "Auth service unavailable", body = crate::infrastructure::http::openapi::ApiError)
     ),
+    security([]),
     tag = "1 - Autenticação"
 )]
 pub async fn auth_token(
@@ -140,10 +139,10 @@ pub async fn auth_token(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": "user login requires Postgres" })),
         ))?;
-        let user = validate_user_password_postgres(pool, email, password).await.map_err(|_| {
+        let user = validate_user_password_postgres(pool, email, password).await.map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "auth service error" })),
+                Json(serde_json::json!({ "error": format!("auth service error: {}", e) })),
             )
         })?;
         let (user_id, role) = match user {
@@ -169,10 +168,10 @@ pub async fn auth_token(
         } else {
             validate_client_secret_redis(state.vault.as_ref(), client_id, secret).await
         };
-        let valid = valid.map_err(|_| {
+        let valid = valid.map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "auth service error" })),
+                Json(serde_json::json!({ "error": format!("auth service error: {}", e) })),
             )
         })?;
         if !valid {
@@ -207,10 +206,10 @@ pub async fn auth_token(
         &claims,
         &EncodingKey::from_secret(jwt_secret.as_bytes()),
     )
-    .map_err(|_| {
+    .map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "failed to issue token" })),
+            Json(serde_json::json!({ "error": format!("failed to issue token: {}", e) })),
         )
     })?;
     Ok(Json(AuthTokenResponse {
@@ -230,6 +229,7 @@ pub async fn auth_token(
         (status = 409, description = "Email já registrado", body = crate::infrastructure::http::openapi::ApiError),
         (status = 503, description = "Postgres não configurado", body = crate::infrastructure::http::openapi::ApiError)
     ),
+    security([]),
     tag = "1 - Autenticação"
 )]
 pub async fn register_user(
@@ -259,13 +259,13 @@ pub async fn register_user(
     ))?;
 
     // Hash password
-    let salt = argon2::password_hash::SaltString::generate(&mut rand::rngs::OsRng);
+    let salt = SaltString::generate(&mut rand::rngs::OsRng);
     let password_hash = Argon2::default()
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|_| {
+        .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "password hashing failed" })),
+                Json(serde_json::json!({ "error": format!("password hashing failed: {}", e) })),
             )
         })?
         .to_string();
@@ -296,9 +296,9 @@ pub async fn register_user(
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "error": "email already registered" })),
         )),
-        Err(_) => Err((
+        Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "registration failed" })),
+            Json(serde_json::json!({ "error": format!("registration failed: {}", e) })),
         )),
     }
 }
@@ -377,15 +377,11 @@ async fn validate_client_secret_redis(
     get,
     path = "/",
     responses((status = 200, description = "Health check")),
+    security([]),
     tag = "1 - Autenticação"
 )]
 pub async fn health() -> &'static str {
     "SecLLM: Sistema Ativo"
-}
-
-/// Redirect GET /swagger-ui → /swagger-ui/ to avoid ERR_INVALID_REDIRECT from the UI.
-async fn redirect_swagger_trailing_slash() -> Redirect {
-    Redirect::permanent("/swagger-ui/")
 }
 
 // ---- Vault API (CRUD + Redis replication) ----
@@ -405,7 +401,7 @@ async fn resolve_client(
     .bind(client_id)
     .fetch_optional(pool)
     .await
-    .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     match row {
         Some((id, user_id)) => Ok((id, user_id)),
         None => Err(api_err(StatusCode::NOT_FOUND, "client not found")),
@@ -484,12 +480,12 @@ pub async fn put_api_key(
     .bind(api_key)
     .execute(pool)
     .await
-    .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     state
         .vault
         .set_api_key(&client_id, prov, api_key)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "failed to replicate to Redis"))?;
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("failed to replicate to Redis: {}", e)))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -527,7 +523,7 @@ pub async fn delete_api_key(
     .bind(prov)
     .execute(pool)
     .await
-    .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     if res.rows_affected() == 0 {
         return Err(api_err(StatusCode::NOT_FOUND, "api key not found"));
     }
@@ -535,7 +531,7 @@ pub async fn delete_api_key(
         .vault
         .del_api_key(&client_id, prov)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "failed to replicate to Redis"))?;
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("failed to replicate to Redis: {}", e)))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -577,10 +573,10 @@ pub async fn put_client_secret(
     if secret.is_empty() {
         return Err(api_err(StatusCode::BAD_REQUEST, "client_secret is required"));
     }
-    let salt = argon2::password_hash::SaltString::generate(&mut rand::rngs::OsRng);
+    let salt = SaltString::generate(&mut rand::rngs::OsRng);
     let hash = argon2::Argon2::default()
         .hash_password(secret.as_bytes(), &salt)
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "hashing failed"))?
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("hashing failed: {}", e)))?
         .to_string();
     sqlx::query(
         r#"
@@ -593,12 +589,12 @@ pub async fn put_client_secret(
     .bind(&hash)
     .execute(pool)
     .await
-    .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     state
         .vault
         .set_client_secret(&client_id, secret)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "failed to replicate to Redis"))?;
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("failed to replicate to Redis: {}", e)))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -632,7 +628,7 @@ pub async fn delete_client_secret(
         .bind(client_uuid)
         .execute(pool)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     if res.rows_affected() == 0 {
         return Err(api_err(StatusCode::NOT_FOUND, "client secret not found"));
     }
@@ -640,7 +636,7 @@ pub async fn delete_client_secret(
         .vault
         .del_client_secret(&client_id)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "failed to replicate to Redis"))?;
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("failed to replicate to Redis: {}", e)))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -687,11 +683,11 @@ pub async fn post_billing_log(
     let period_start: chrono::NaiveDate = body
         .period_start
         .parse()
-        .map_err(|_| api_err(StatusCode::BAD_REQUEST, "period_start must be YYYY-MM-DD"))?;
+        .map_err(|e| api_err(StatusCode::BAD_REQUEST, &format!("period_start invalid (expected YYYY-MM-DD): {}", e)))?;
     let period_end: chrono::NaiveDate = body
         .period_end
         .parse()
-        .map_err(|_| api_err(StatusCode::BAD_REQUEST, "period_end must be YYYY-MM-DD"))?;
+        .map_err(|e| api_err(StatusCode::BAD_REQUEST, &format!("period_end invalid (expected YYYY-MM-DD): {}", e)))?;
     let client_uuid = if let Some(cid) = &body.client_id {
         let (client_uuid, owner_user_id) = resolve_client(pool, cid).await?;
         if !can_manage_client(&ctx, cid, owner_user_id) {
@@ -713,7 +709,7 @@ pub async fn post_billing_log(
     .bind(&details)
     .execute(pool)
     .await
-    .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     Ok(StatusCode::CREATED)
 }
 
@@ -741,7 +737,7 @@ pub async fn get_governance_global(
     )
     .fetch_optional(pool)
     .await
-    .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     Ok(Json(
         row.map(|(p,)| p).unwrap_or(serde_json::json!({ "mask_pii": [], "mask_response": true })),
     ))
@@ -782,7 +778,7 @@ pub async fn put_governance_global(
     .bind(&body.policy)
     .execute(pool)
     .await
-    .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     if res.rows_affected() == 0 {
         sqlx::query(
             "INSERT INTO governance_policies (scope, client_id, policy) VALUES ('global', NULL, $1)",
@@ -790,7 +786,7 @@ pub async fn put_governance_global(
         .bind(&body.policy)
         .execute(pool)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -827,7 +823,7 @@ pub async fn get_governance_client(
     .bind(client_uuid)
     .fetch_optional(pool)
     .await
-    .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     Ok(Json(
         row.map(|(p,)| p).unwrap_or(serde_json::json!({ "mask_pii": [], "mask_response": true })),
     ))
@@ -868,7 +864,7 @@ pub async fn put_governance_client(
     .bind(client_uuid)
     .execute(pool)
     .await
-    .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     if res.rows_affected() == 0 {
         sqlx::query(
             "INSERT INTO governance_policies (scope, client_id, policy) VALUES ('client', $1, $2)",
@@ -877,7 +873,7 @@ pub async fn put_governance_client(
         .bind(&body.policy)
         .execute(pool)
         .await
-        .map_err(|_| api_err(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     }
     Ok(StatusCode::NO_CONTENT)
 }

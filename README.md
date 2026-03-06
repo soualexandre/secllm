@@ -56,6 +56,12 @@ O SecLLM utiliza **Arquitetura Hexagonal (Clean Architecture)** para garantir qu
     ```
     A API ficará em **http://localhost:3010** (porta 3010 no host). Detalhes (incl. como configurar chaves no Redis) em [docker/README.md](docker/README.md).
 
+    **Desenvolvimento com auto-reload:** para recompilar e reiniciar o app ao alterar o código, sem reiniciar o container:
+    ```bash
+    docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+    ```
+    Veja [docker/README.md](docker/README.md#modo-desenvolvimento-auto-reload).
+
     *Alternativa:* subir só a infraestrutura e rodar a app no host (veja abaixo).
 
 3.  **Rodar a aplicação localmente (`cargo run`):**

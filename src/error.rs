@@ -41,7 +41,7 @@ impl IntoResponse for AppError {
             AppError::Privacy(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::Proxy(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Logging(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".into()),
+            AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
         let body = ErrorBody { error: message };
         (status, Json(body)).into_response()

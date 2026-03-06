@@ -1,0 +1,34 @@
+# SecLLM – desenvolvimento com auto-reload (cargo watch)
+# Uso: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+# Ou: docker compose --profile dev up --build  (se o profile estiver no principal)
+
+services:
+  secllm:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: secllm:dev
+    container_name: secllm-app
+    volumes:
+      - .:/app
+      - secllm_target:/app/target
+    environment:
+      SECLLM__SERVER__HOST: "0.0.0.0"
+      SECLLM__SERVER__PORT: "3000"
+      SECLLM__REDIS__URL: "redis://redis:6379"
+      SECLLM__RABBITMQ__URL: "amqp://secllm:secllm@rabbitmq:5672/%2f"
+      SECLLM__RABBITMQ__AUDIT_EXCHANGE: "secllm.audit"
+      SECLLM__RABBITMQ__AUDIT_QUEUE: "secllm.audit.logs"
+      SECLLM__RABBITMQ__AUDIT_ROUTING_KEY: "audit.log"
+      SECLLM__CLICKHOUSE__URL: "http://clickhouse:8123"
+      SECLLM__CLICKHOUSE__DATABASE: "secllm"
+      SECLLM__CLICKHOUSE__AUDIT_TABLE: "audit_events"
+      SECLLM__JWT__SECRET: "change-me-in-production"
+      SECLLM__LOGGING_WORKER__BATCH_MAX_SIZE: "100"
+      SECLLM__LOGGING_WORKER__BATCH_MAX_LATENCY_MS: "500"
+      SECLLM__POSTGRES__URL: "postgres://secllm:secllm@postgres:5432/secllm"
+    # Não usar restart: unless-stopped em dev para ver logs e parar com Ctrl+C
+    restart: "no"
+
+volumes:
+  secllm_target:

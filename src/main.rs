@@ -74,6 +74,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         batch_max_latency_ms: config.logging_worker.batch_max_latency_ms,
     };
     tokio::spawn(async move {
+        // Short delay so Docker DNS is ready (avoids "failed to lookup address information" at startup)
+        tokio::time::sleep(Duration::from_secs(3)).await;
         worker::run_worker(worker_config).await
     });
 

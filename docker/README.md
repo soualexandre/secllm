@@ -13,7 +13,26 @@ docker compose up -d --build
 - **PostgreSQL:** localhost:5432 (user: `secllm`, password: `secllm`, database: `secllm`)  
 - **ClickHouse HTTP:** http://localhost:8123  
 
-## Atualizar o container com novo código
+## Modo desenvolvimento (auto-reload)
+
+Para que o container **recompile e reinicie sozinho** ao alterar código (sem reiniciar o container à mão):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+- O código do projeto é montado em **volume** (`.:/app`).
+- Dentro do container roda **cargo watch**: ao salvar alterações em `src/`, `config/` ou `Cargo.toml`, o Rust recompila e o processo reinicia.
+- O cache de compilação fica no volume `secllm_target`, para não perder entre reinícios.
+- Deixe o comando rodando no terminal para ver os logs; ao editar e salvar, a recompilação e o restart aparecem ali.
+
+Para subir só a infra e o app em modo dev em background (não recomendado, pois você não vê o cargo watch):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+## Atualizar o container com novo código (produção)
 
 Depois de alterar o código Rust, é preciso **reconstruir a imagem e recriar o container** para o app usar o novo binário:
 
@@ -149,4 +168,4 @@ O disco/cache do Docker (containerd) está corrompido ou com falha. Tente:
 ### "failed to lookup address information: Name or service not known" / "Connection refused"
 
 - **App rodando no host (`cargo run`):** a config está usando hostnames do Docker (`redis`, `rabbitmq`, `clickhouse`, `postgres`), que não existem no seu PC. Não exporte no terminal as variáveis do `docker-compose.yml`. Use só `config/default.toml` (já com `127.0.0.1`) ou defina `SECLLM__REDIS__URL=redis://127.0.0.1:6379`, etc., com **127.0.0.1**. Suba a infra antes: `docker compose up -d redis rabbitmq postgres clickhouse clickhouse-init`.
-- **App rodando no container:** os hostnames (`redis`, `rabbitmq`, etc.) só funcionam dentro da rede do Compose. Confira se o serviço `secllm` está no mesmo `networks` e se os outros containers estão healthy (`docker compose ps`).
+- **App rodando no container:** os hostnames (`redis`, `rabbitmq`, etc.) só funcionam dentro da rede do Compose. Confira se o serviço `secllm` está no mesmo `networks` e se os outros containers estão healthy (`docker compose ps`). O worker de audit inicia com um atraso de 3 segundos para o DNS do Docker estar pronto; se ainda aparecer "failed to lookup" no início, aguarde alguns segundos (o worker reconecta a cada 5 s até conseguir).

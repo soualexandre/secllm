@@ -1,0 +1,22 @@
+# SecLLM – desenvolvimento com hot-reload (cargo-watch)
+# Montar código com volume e rodar: cargo watch -x run
+
+FROM rust:1-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN cargo install cargo-watch
+
+WORKDIR /app
+
+# Código é montado via volume em runtime; cópia inicial para ter deps
+COPY Cargo.toml Cargo.lock ./
+COPY config ./config
+COPY src ./src
+
+# Primeira compilação (em seguida o volume sobrescreve e cargo watch recompila ao mudar)
+RUN cargo build 2>/dev/null || true
+
+CMD ["cargo", "watch", "-x", "run", "-w", "src", "-w", "config", "-w", "Cargo.toml"]
