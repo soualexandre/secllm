@@ -21,6 +21,14 @@ Projetado para ambientes corporativos e governamentais onde a **privacidade de d
 
 ---
 
+## 📸 Interface (Dashboard)
+
+O painel exibe métricas agregadas (total de requisições, tokens, latência média, taxa de erro), filtros por provider e status, e a faixa de latência (mín/máx).
+
+![Dashboard SecLLM — métricas, filtros por provider e status](secllm-front/public/screenchot.png)
+
+---
+
 ## 🏗️ Arquitetura
 
 O SecLLM utiliza **Arquitetura Hexagonal (Clean Architecture)** para garantir que as regras de governança sejam independentes de provedores externos ou bancos de dados.
