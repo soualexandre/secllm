@@ -16,6 +16,9 @@ pub enum AppError {
     #[error("authentication failed: {0}")]
     Auth(String),
 
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
     #[error("vault error: {0}")]
     Vault(String),
 
@@ -37,6 +40,7 @@ impl IntoResponse for AppError {
         let (status, message) = match &self {
             AppError::Config(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             AppError::Auth(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
+            AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::Vault(_) => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             AppError::Privacy(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::Proxy(_) => (StatusCode::BAD_GATEWAY, self.to_string()),

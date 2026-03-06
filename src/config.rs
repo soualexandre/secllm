@@ -57,6 +57,7 @@ pub struct JwtConfig {
 pub struct LlmConfig {
     pub openai_base_url: String,
     pub anthropic_base_url: String,
+    pub gemini_base_url: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

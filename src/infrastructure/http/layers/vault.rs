@@ -7,7 +7,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use crate::domain::{LlmProvider, RequestContext};
+use crate::domain::RequestContext;
 use crate::infrastructure::http::state::AppState;
 
 pub async fn vault_layer(
@@ -25,10 +25,7 @@ pub async fn vault_layer(
         .cloned()
         .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "missing auth context").into_response())?;
 
-    let provider_str = match ctx.provider {
-        LlmProvider::OpenAI => "openai",
-        LlmProvider::Anthropic => "anthropic",
-    };
+    let provider_str = ctx.provider.as_str();
     let api_key = state
         .vault
         .get_api_key(&ctx.client_id, provider_str)

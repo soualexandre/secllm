@@ -17,10 +17,34 @@ pub struct RequestContext {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Copy)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy, Hash)]
 pub enum LlmProvider {
     OpenAI,
     Anthropic,
+    Gemini,
+}
+
+impl LlmProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LlmProvider::OpenAI => "openai",
+            LlmProvider::Anthropic => "anthropic",
+            LlmProvider::Gemini => "gemini",
+        }
+    }
+
+    pub fn all() -> &'static [LlmProvider] {
+        &[LlmProvider::OpenAI, LlmProvider::Anthropic, LlmProvider::Gemini]
+    }
+
+    pub fn from_str(s: &str) -> Option<LlmProvider> {
+        match s.to_lowercase().as_str() {
+            "openai" => Some(LlmProvider::OpenAI),
+            "anthropic" => Some(LlmProvider::Anthropic),
+            "gemini" => Some(LlmProvider::Gemini),
+            _ => None,
+        }
+    }
 }
 
 /// Span of text that was masked (PII or secret).

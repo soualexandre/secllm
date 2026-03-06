@@ -4,7 +4,7 @@ use axum::{
     extract::{Path as AxumPath, State},
     http::{HeaderMap, Method, StatusCode, Uri},
     response::IntoResponse,
-    routing::{any, post, put},
+    routing::{any, get, post, put},
     Json, Router,
 };
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -12,6 +12,7 @@ use argon2::Argon2;
 use bytes::Bytes;
 use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[allow(unused_imports)]
@@ -71,6 +72,10 @@ pub fn router(state: Arc<AppState>) -> Router {
     use crate::infrastructure::http::layers;
 
     let api_routes = Router::new()
+        .route("/me", get(get_me))
+        .route("/providers", get(get_providers))
+        .route("/clients", get(list_clients).post(create_client))
+        .route("/clients/:client_id/credentials", get(get_client_credentials))
         .route(
             "/clients/:client_id/keys/:provider",
             put(put_api_key).delete(delete_api_key),
@@ -421,12 +426,331 @@ fn can_manage_client(
     }
 }
 
-fn normalize_provider(provider: &str) -> &'static str {
-    if provider.eq_ignore_ascii_case("anthropic") {
-        "anthropic"
-    } else {
-        "openai"
+fn parse_provider(provider: &str) -> Option<crate::domain::LlmProvider> {
+    crate::domain::LlmProvider::from_str(provider)
+}
+
+/// Resposta de GET /api/v1/me (dados do usuário autenticado com email+senha).
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct MeResponse {
+    pub id: String,
+    pub email: String,
+    pub name: Option<String>,
+    pub role: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/me",
+    responses(
+        (status = 200, description = "Dados do usuário", body = MeResponse),
+        (status = 403, description = "Apenas token de usuário (email+senha)", body = crate::infrastructure::http::openapi::ApiError),
+        (status = 404, description = "Usuário não encontrado", body = crate::infrastructure::http::openapi::ApiError),
+        (status = 503, description = "Postgres não configurado", body = crate::infrastructure::http::openapi::ApiError)
+    ),
+    security(("bearer_auth" = [])),
+    tag = "1 - Autenticação"
+)]
+pub async fn get_me(
+    State(state): State<Arc<AppState>>,
+    Context(ctx): Context,
+) -> Result<Json<MeResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let pool = state
+        .postgres
+        .as_ref()
+        .ok_or_else(|| api_err(StatusCode::SERVICE_UNAVAILABLE, "Postgres not configured"))?;
+    let user_id: uuid::Uuid = ctx
+        .scope
+        .as_ref()
+        .and_then(|_| uuid::Uuid::parse_str(&ctx.client_id).ok())
+        .ok_or_else(|| api_err(StatusCode::FORBIDDEN, "only user token can get profile (login with email+password)"))?;
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: uuid::Uuid,
+        email: String,
+        name: Option<String>,
+        role: String,
     }
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT id, email, name, role::text FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    let r = row.ok_or_else(|| api_err(StatusCode::NOT_FOUND, "user not found"))?;
+    Ok(Json(MeResponse {
+        id: r.id.to_string(),
+        email: r.email,
+        name: r.name,
+        role: r.role,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/providers",
+    responses(
+        (status = 200, description = "Lista de provedores LLM disponíveis", body = Vec<String>)
+    ),
+    security(("bearer_auth" = [])),
+    tag = "2 - Cofre (Vault)"
+)]
+pub async fn get_providers() -> Json<Vec<String>> {
+    Json(
+        crate::domain::LlmProvider::all()
+            .iter()
+            .map(|p| p.as_str().to_string())
+            .collect(),
+    )
+}
+
+/// Item da listagem de clientes do usuário.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct ListClientItem {
+    pub client_id: String,
+    pub name: Option<String>,
+    pub keys: Vec<String>,
+    pub has_secret: bool,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/clients",
+    responses(
+        (status = 200, description = "Lista de clientes do usuário", body = Vec<ListClientItem>),
+        (status = 403, description = "Apenas token de usuário pode listar clientes", body = crate::infrastructure::http::openapi::ApiError),
+        (status = 503, description = "Postgres não configurado", body = crate::infrastructure::http::openapi::ApiError)
+    ),
+    security(("bearer_auth" = [])),
+    tag = "2 - Cofre (Vault)"
+)]
+pub async fn list_clients(
+    State(state): State<Arc<AppState>>,
+    Context(ctx): Context,
+) -> Result<Json<Vec<ListClientItem>>, (StatusCode, Json<serde_json::Value>)> {
+    let pool = state
+        .postgres
+        .as_ref()
+        .ok_or_else(|| api_err(StatusCode::SERVICE_UNAVAILABLE, "Postgres not configured"))?;
+    let owner_user_id: uuid::Uuid = ctx
+        .scope
+        .as_ref()
+        .and_then(|_| uuid::Uuid::parse_str(&ctx.client_id).ok())
+        .ok_or_else(|| api_err(StatusCode::FORBIDDEN, "only user token can list clients (login with email+password)"))?;
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        client_id: String,
+        name: Option<String>,
+        keys: Option<Vec<String>>,
+        has_secret: bool,
+    }
+    let mut tx = pool.begin().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+        .bind(owner_user_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    let rows: Vec<Row> = sqlx::query_as(
+        r#"
+        SELECT
+            c.client_id,
+            c.name,
+            (SELECT COALESCE(array_agg(ak.provider::text), ARRAY[]::text[]) FROM api_keys ak WHERE ak.client_id = c.id) AS keys,
+            EXISTS(SELECT 1 FROM client_secrets cs WHERE cs.client_id = c.id) AS has_secret
+        FROM clients c
+        WHERE c.user_id = $1
+        ORDER BY c.created_at DESC
+        "#,
+    )
+    .bind(owner_user_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    tx.commit().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    let list: Vec<ListClientItem> = rows
+        .into_iter()
+        .map(|r| ListClientItem {
+            client_id: r.client_id,
+            name: r.name,
+            keys: r.keys.unwrap_or_default(),
+            has_secret: r.has_secret,
+        })
+        .collect();
+    Ok(Json(list))
+}
+
+#[derive(serde::Deserialize, utoipa::ToSchema)]
+pub struct CreateClientRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct CreateClientResponse {
+    pub client_id: String,
+    /// Exibido apenas na criação; guarde para autenticação com client_id + client_secret.
+    pub client_secret: String,
+    pub name: Option<String>,
+}
+
+fn generate_client_id() -> String {
+    use rand::Rng;
+    const LEN: usize = 16;
+    let s: String = rand::thread_rng()
+        .sample_iter(rand::distributions::Alphanumeric)
+        .take(LEN)
+        .map(char::from)
+        .collect();
+    format!("cli_{}", s.to_lowercase())
+}
+
+fn generate_client_secret() -> String {
+    let a = uuid::Uuid::new_v4().to_string().replace('-', "");
+    let b = uuid::Uuid::new_v4().to_string().replace('-', "");
+    format!("{}{}", a, b)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/clients",
+    request_body = CreateClientRequest,
+    responses(
+        (status = 201, description = "Cliente criado (client_id e client_secret gerados)", body = CreateClientResponse),
+        (status = 403, description = "Apenas token de usuário (email+senha) pode criar clientes", body = crate::infrastructure::http::openapi::ApiError),
+        (status = 503, description = "Postgres não configurado", body = crate::infrastructure::http::openapi::ApiError)
+    ),
+    security(("bearer_auth" = [])),
+    tag = "2 - Cofre (Vault)"
+)]
+pub async fn create_client(
+    State(state): State<Arc<AppState>>,
+    Context(ctx): Context,
+    Json(body): Json<CreateClientRequest>,
+) -> Result<(StatusCode, Json<CreateClientResponse>), (StatusCode, Json<serde_json::Value>)> {
+    let pool = state
+        .postgres
+        .as_ref()
+        .ok_or_else(|| api_err(StatusCode::SERVICE_UNAVAILABLE, "Postgres not configured"))?;
+    let owner_user_id: uuid::Uuid = ctx
+        .scope
+        .as_ref()
+        .and_then(|_| uuid::Uuid::parse_str(&ctx.client_id).ok())
+        .ok_or_else(|| api_err(StatusCode::FORBIDDEN, "only user token can create clients (login with email+password)"))?;
+    let name = body.name.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+
+    let client_secret_plain = generate_client_secret();
+    let salt = SaltString::generate(&mut rand::rngs::OsRng);
+    let secret_hash = argon2::Argon2::default()
+        .hash_password(client_secret_plain.as_bytes(), &salt)
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("hashing failed: {}", e)))?
+        .to_string();
+
+    const MAX_RETRIES: u32 = 5;
+    for _ in 0..MAX_RETRIES {
+        let client_id = generate_client_id();
+        let mut tx = pool.begin().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(owner_user_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+        let res_client = sqlx::query("INSERT INTO clients (client_id, user_id, name) VALUES ($1, $2, $3)")
+            .bind(&client_id)
+            .bind(owner_user_id)
+            .bind(name.clone())
+            .execute(&mut *tx)
+            .await;
+        match res_client {
+            Ok(_) => {
+                let client_uuid: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM clients WHERE client_id = $1")
+                    .bind(&client_id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+                sqlx::query("INSERT INTO client_secrets (client_id, secret_hash) VALUES ($1, $2)")
+                    .bind(client_uuid.0)
+                    .bind(&secret_hash)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+                tx.commit().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+                state
+                    .vault
+                    .set_client_secret(&client_id, &client_secret_plain)
+                    .await
+                    .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("failed to replicate to Redis: {}", e)))?;
+                return Ok((
+                    StatusCode::CREATED,
+                    Json(CreateClientResponse {
+                        client_id,
+                        client_secret: client_secret_plain,
+                        name: name.map(String::from),
+                    }),
+                ));
+            }
+            Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
+                let _ = tx.rollback().await;
+                continue;
+            }
+            Err(e) => {
+                let _ = tx.rollback().await;
+                return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)));
+            }
+        }
+    }
+    Err(api_err(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "failed to generate unique client_id after retries",
+    ))
+}
+
+/// Credenciais do cofre (vault) para consumo programático (CLI, scripts, backends).
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct ClientCredentialsResponse {
+    /// Chaves por provedor (openai, anthropic, gemini); null se não configurada.
+    pub keys: HashMap<String, Option<String>>,
+    pub client_secret: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/clients/{client_id}/credentials",
+    params(("client_id" = String, Path, description = "ID do cliente (app)")),
+    responses(
+        (status = 200, description = "Credenciais do vault (uso programático apenas)", body = ClientCredentialsResponse),
+        (status = 403, description = "Forbidden", body = crate::infrastructure::http::openapi::ApiError),
+        (status = 404, description = "Cliente não encontrado", body = crate::infrastructure::http::openapi::ApiError),
+        (status = 503, description = "Vault/Postgres não configurado", body = crate::infrastructure::http::openapi::ApiError)
+    ),
+    security(("bearer_auth" = [])),
+    tag = "2 - Cofre (Vault)"
+)]
+pub async fn get_client_credentials(
+    State(state): State<Arc<AppState>>,
+    Context(ctx): Context,
+    AxumPath(client_id): AxumPath<String>,
+) -> Result<Json<ClientCredentialsResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let pool = state
+        .postgres
+        .as_ref()
+        .ok_or_else(|| api_err(StatusCode::SERVICE_UNAVAILABLE, "Postgres not configured"))?;
+    let (_client_uuid, owner_user_id) = resolve_client(pool, &client_id).await?;
+    if !can_manage_client(&ctx, &client_id, owner_user_id) {
+        return Err(api_err(StatusCode::FORBIDDEN, "forbidden"));
+    }
+    let mut keys = HashMap::new();
+    for provider in crate::domain::LlmProvider::all() {
+        let id = provider.as_str().to_string();
+        let value = state.vault.get_api_key(&client_id, provider.as_str()).await.ok();
+        keys.insert(id, value);
+    }
+    let client_secret = state
+        .vault
+        .get_client_secret(&client_id)
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("vault error: {}", e)))?;
+    Ok(Json(ClientCredentialsResponse { keys, client_secret }))
 }
 
 #[derive(serde::Deserialize, utoipa::ToSchema)]
@@ -463,11 +787,19 @@ pub async fn put_api_key(
     if !can_manage_client(&ctx, &client_id, owner_user_id) {
         return Err(api_err(StatusCode::FORBIDDEN, "forbidden"));
     }
-    let prov = normalize_provider(&provider);
+    let prov_enum = parse_provider(&provider)
+        .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "invalid provider; use openai, anthropic, or gemini"))?;
+    let prov = prov_enum.as_str();
     let api_key = body.api_key.trim();
     if api_key.is_empty() {
         return Err(api_err(StatusCode::BAD_REQUEST, "api_key is required"));
     }
+    let mut tx = pool.begin().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+        .bind(owner_user_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     sqlx::query(
         r#"
         INSERT INTO api_keys (client_id, provider, encrypted_key)
@@ -478,9 +810,10 @@ pub async fn put_api_key(
     .bind(client_uuid)
     .bind(prov)
     .bind(api_key)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    tx.commit().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     state
         .vault
         .set_api_key(&client_id, prov, api_key)
@@ -515,15 +848,24 @@ pub async fn delete_api_key(
     if !can_manage_client(&ctx, &client_id, owner_user_id) {
         return Err(api_err(StatusCode::FORBIDDEN, "forbidden"));
     }
-    let prov = normalize_provider(&provider);
+    let prov = parse_provider(&provider)
+        .ok_or_else(|| api_err(StatusCode::BAD_REQUEST, "invalid provider; use openai, anthropic, or gemini"))?
+        .as_str();
+    let mut tx = pool.begin().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+        .bind(owner_user_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     let res = sqlx::query(
         "DELETE FROM api_keys WHERE client_id = $1 AND provider = $2::llm_provider",
     )
     .bind(client_uuid)
     .bind(prov)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    tx.commit().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     if res.rows_affected() == 0 {
         return Err(api_err(StatusCode::NOT_FOUND, "api key not found"));
     }
@@ -578,6 +920,12 @@ pub async fn put_client_secret(
         .hash_password(secret.as_bytes(), &salt)
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("hashing failed: {}", e)))?
         .to_string();
+    let mut tx = pool.begin().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+        .bind(owner_user_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     sqlx::query(
         r#"
         INSERT INTO client_secrets (client_id, secret_hash)
@@ -587,9 +935,10 @@ pub async fn put_client_secret(
     )
     .bind(client_uuid)
     .bind(&hash)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    tx.commit().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     state
         .vault
         .set_client_secret(&client_id, secret)
@@ -624,11 +973,18 @@ pub async fn delete_client_secret(
     if !can_manage_client(&ctx, &client_id, owner_user_id) {
         return Err(api_err(StatusCode::FORBIDDEN, "forbidden"));
     }
-    let res = sqlx::query("DELETE FROM client_secrets WHERE client_id = $1")
-        .bind(client_uuid)
-        .execute(pool)
+    let mut tx = pool.begin().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+        .bind(owner_user_id.to_string())
+        .execute(&mut *tx)
         .await
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    let res = sqlx::query("DELETE FROM client_secrets WHERE client_id = $1")
+        .bind(client_uuid)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
+    tx.commit().await.map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     if res.rows_affected() == 0 {
         return Err(api_err(StatusCode::NOT_FOUND, "client secret not found"));
     }
@@ -878,16 +1234,95 @@ pub async fn put_governance_client(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Mensagem no formato chat (OpenAI/Anthropic). Use "user" para o texto a ser analisado.
+#[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct GatewayChatMessage {
+    /// "system" | "user" | "assistant"
+    pub role: String,
+    /// Texto a ser analisado ou resposta do assistente.
+    pub content: String,
+}
+
+/// Provedor LLM selecionável no body (Swagger dropdown). Se omitido, usa o provedor do JWT.
+#[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema, Debug, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum GatewayProvider {
+    OpenAI,
+    Anthropic,
+    Gemini,
+}
+
+impl GatewayProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GatewayProvider::OpenAI => "openai",
+            GatewayProvider::Anthropic => "anthropic",
+            GatewayProvider::Gemini => "gemini",
+        }
+    }
+}
+
+/// Modelos comuns para dropdown no Swagger (o gateway aceita qualquer string de modelo).
+#[derive(utoipa::ToSchema)]
+#[schema(example = "gpt-4o")]
+pub enum GatewayModelEnum {
+    #[schema(rename = "gpt-4o")]
+    Gpt4o,
+    #[schema(rename = "gpt-4o-mini")]
+    Gpt4oMini,
+    #[schema(rename = "gpt-4-turbo")]
+    Gpt4Turbo,
+    #[schema(rename = "gpt-3.5-turbo")]
+    Gpt35Turbo,
+    #[schema(rename = "claude-3-5-sonnet-20241022")]
+    Claude35Sonnet,
+    #[schema(rename = "claude-3-opus-20240229")]
+    Claude3Opus,
+    #[schema(rename = "claude-3-sonnet-20240229")]
+    Claude3Sonnet,
+    #[schema(rename = "gemini-1.5-pro")]
+    Gemini15Pro,
+    #[schema(rename = "gemini-1.5-flash")]
+    Gemini15Flash,
+}
+
+/// Body para POST /v1/chat/completions. Identifique o cliente e o provedor para usar a API key correta do cofre; o restante é repassado ao LLM.
+#[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+pub struct GatewayChatRequest {
+    /// **client_id** – ID do cliente (app) cuja API key será usada. O cofre (vault) armazena uma API key por (client_id, provider). Se omitido, usa o client_id do JWT (token de app). Com token de usuário, informe o client_id do app que possui a chave configurada (o usuário deve ser dono do app).
+    #[serde(default)]
+    pub client_id: Option<String>,
+    /// **provider** – Provedor LLM (openai, anthropic, gemini). Identifica qual API key do cliente usar (ex.: a chave OpenAI cadastrada em Manage para esse client_id). Se omitido, usa o provedor do token.
+    #[serde(default)]
+    pub provider: Option<GatewayProvider>,
+    /// Modelo do provedor (ex: gpt-4o, claude-3-5-sonnet-20241022). No Swagger use o dropdown.
+    #[schema(value_type = GatewayModelEnum)]
+    pub model: String,
+    /// Lista de mensagens; use role "user" e content com o texto a ser analisado.
+    pub messages: Vec<GatewayChatMessage>,
+    /// Máximo de tokens na resposta (opcional).
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Temperatura 0.0–2.0 (opcional).
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// Stream de chunks (opcional; no Swagger use false).
+    #[serde(default)]
+    pub stream: Option<bool>,
+}
+
 /// Documentação OpenAPI do gateway (rota real é catch-all /*path).
 #[utoipa::path(
     post,
     path = "/v1/chat/completions",
     tag = "5 - Gateway LLM",
+    request_body = GatewayChatRequest,
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Resposta repassada do provedor (OpenAI/Anthropic). Qualquer path é encaminhado; provider do JWT."),
+        (status = 200, description = "Resposta repassada do provedor (OpenAI/Anthropic). Inclui choices[].message.content com o texto gerado."),
         (status = 401, description = "Token ausente ou inválido"),
-        (status = 502, description = "Erro do provedor LLM")
+        (status = 403, description = "client_id do body não autorizado para este token"),
+        (status = 502, description = "Erro do provedor LLM ou API key não encontrada no cofre (configure client_id e provider com uma chave em Manage)")
     )
 )]
 pub fn proxy_handler_doc() {}
@@ -900,24 +1335,79 @@ async fn proxy_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
-    let provider_str = match partial_ctx.provider {
-        crate::domain::LlmProvider::OpenAI => "openai",
-        crate::domain::LlmProvider::Anthropic => "anthropic",
-    };
-    let api_key = state
-        .vault
-        .get_api_key(&partial_ctx.client_id, provider_str)
-        .await?;
-    let ctx = crate::domain::RequestContext {
-        api_key,
-        ..partial_ctx
-    };
-
     let path = uri.path();
     let path_query = uri
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or(path);
+
+    let (client_id_for_vault, provider_override, body_to_forward) = if method == Method::POST
+        && (path.contains("chat/completions") || path.ends_with("completions"))
+    {
+        if let Ok(parsed) = serde_json::from_slice::<GatewayChatRequest>(&body) {
+            let client_id_override = parsed
+                .client_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            let provider_override = parsed.provider.map(|p| p.as_str().to_string());
+            let body_clean = strip_gateway_params_from_json(&body);
+            (client_id_override, provider_override, body_clean.unwrap_or(body.to_vec()))
+        } else {
+            (None, None, body.to_vec())
+        }
+    } else {
+        (None, None, body.to_vec())
+    };
+
+    let vault_client_id = client_id_for_vault.as_deref().unwrap_or(partial_ctx.client_id.as_str());
+    if let Some(ref cid) = client_id_for_vault {
+        if partial_ctx.scope.is_none() {
+            if cid.as_str() != partial_ctx.client_id {
+                return Err(crate::error::AppError::Forbidden(
+                    "client_id do body deve ser igual ao do token (token de app)".into(),
+                ));
+            }
+        } else if let Some(pool) = state.postgres.as_ref() {
+            let owner_user_id: uuid::Uuid = match uuid::Uuid::parse_str(&partial_ctx.client_id) {
+                Ok(u) => u,
+                Err(_) => {
+                    return Err(crate::error::AppError::Forbidden(
+                        "token de usuário: client_id do body deve ser de um app que você possui".into(),
+                    ));
+                }
+            };
+            let (_, owner) = resolve_client(pool, cid)
+                .await
+                .map_err(|_| {
+                    crate::error::AppError::Forbidden(
+                        "client_id não encontrado ou você não é dono do app".into(),
+                    )
+                })?;
+            if owner != owner_user_id {
+                return Err(crate::error::AppError::Forbidden(
+                    "client_id do body deve ser de um app que você possui".into(),
+                ));
+            }
+        }
+    }
+
+    let provider_str = provider_override
+        .as_deref()
+        .and_then(|s| parse_provider(s).map(|p| p.as_str()))
+        .unwrap_or_else(|| partial_ctx.provider.as_str());
+    let api_key = state
+        .vault
+        .get_api_key(vault_client_id, provider_str)
+        .await?;
+    let provider_enum = parse_provider(provider_str).unwrap_or(partial_ctx.provider);
+    let ctx = crate::domain::RequestContext {
+        client_id: vault_client_id.to_string(),
+        api_key,
+        provider: provider_enum,
+        ..partial_ctx
+    };
 
     let forward_headers: Vec<(String, String)> = headers
         .iter()
@@ -937,7 +1427,7 @@ async fn proxy_handler(
         &ctx,
         method.as_str(),
         path_query,
-        body.to_vec(),
+        body_to_forward,
         forward_headers,
         state.logger.as_ref(),
         state.proxy.as_ref(),
@@ -947,4 +1437,13 @@ async fn proxy_handler(
 
     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     Ok((status, Bytes::from(body_bytes)))
+}
+
+/// Remove client_id and provider from the root of the JSON body so it can be forwarded to the LLM API (they are not part of the OpenAI/Anthropic payload).
+fn strip_gateway_params_from_json(body: &[u8]) -> Option<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let obj = value.as_object_mut()?;
+    obj.remove("client_id");
+    obj.remove("provider");
+    serde_json::to_vec(&value).ok()
 }

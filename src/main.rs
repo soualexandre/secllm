@@ -37,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let proxy = Arc::new(ReqwestDispatcher::new(
         config.llm.openai_base_url.clone(),
         config.llm.anthropic_base_url.clone(),
+        config.llm.gemini_base_url.clone(),
     )?);
     let governance = GovernancePolicy::default_strict();
     let privacy = Arc::new(PrivacyService::new(governance.clone()));

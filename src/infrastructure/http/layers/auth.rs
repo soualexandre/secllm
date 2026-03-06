@@ -85,10 +85,7 @@ pub async fn auth_layer(
         .provider
         .as_deref()
         .unwrap_or("openai");
-    let provider = match provider.to_lowercase().as_str() {
-        "anthropic" => LlmProvider::Anthropic,
-        _ => LlmProvider::OpenAI,
-    };
+    let provider = LlmProvider::from_str(provider).unwrap_or(LlmProvider::OpenAI);
 
     // We don't have api_key yet; vault layer will add RequestContext with api_key
     let ctx = RequestContext {

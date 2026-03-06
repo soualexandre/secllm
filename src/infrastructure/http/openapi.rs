@@ -40,20 +40,25 @@ impl Modify for SecurityAddon {
         description = "Proxy de governança para LLMs (OpenAI/Anthropic). \
             **Fluxo recomendado:** 1) Registrar usuário (POST /auth/register ou /api/users/register). \
             2) Login (POST /auth/token) com email+senha ou client_id+client_secret para obter o Bearer token. \
-            3) Gerenciar chaves no cofre (PUT/DELETE /api/v1/clients/.../keys/... e .../secret). \
-            4) Chamar o gateway (qualquer path sob a raiz, ex: POST /v1/chat/completions) com header Authorization: Bearer <token>."
+            3) Criar cliente (POST /api/v1/clients). 4) Gerenciar chaves no cofre (PUT/DELETE /api/v1/clients/.../keys/... e .../secret). \
+            5) Chamar o gateway (qualquer path sob a raiz, ex: POST /v1/chat/completions) com header Authorization: Bearer <token>."
     ),
     tags(
         (name = "1 - Autenticação", description = "Registro e login para obter Bearer token"),
         (name = "2 - Cofre (Vault)", description = "CRUD de chaves de API e client secrets"),
         (name = "3 - Governança", description = "Políticas global e por cliente (JSONB)"),
         (name = "4 - Faturamento", description = "Logs de faturamento por período"),
-        (name = "5 - Gateway LLM", description = "Proxy para OpenAI/Anthropic com privacidade e auditoria")
+        (name = "5 - Gateway LLM", description = "Proxy para OpenAI/Anthropic/Gemini. No body de POST /v1/chat/completions informe client_id (ID do app cuja API key usar) e provider (openai, anthropic ou gemini); o gateway busca no cofre a API key (client_id, provider) e repassa a chamada ao provedor. Token de app: pode omitir (usa client_id e provider do JWT). Token de usuário: informe client_id de um app que você possui com a chave configurada em Manage.")
     ),
     paths(
         routes::health,
         routes::auth_token,
         routes::register_user,
+        routes::get_me,
+        routes::get_providers,
+        routes::list_clients,
+        routes::create_client,
+        routes::get_client_credentials,
         routes::put_api_key,
         routes::delete_api_key,
         routes::put_client_secret,
@@ -70,10 +75,19 @@ impl Modify for SecurityAddon {
         routes::AuthTokenResponse,
         routes::RegisterRequest,
         routes::RegisterResponse,
+        routes::MeResponse,
+        routes::ListClientItem,
+        routes::CreateClientRequest,
+        routes::CreateClientResponse,
+        routes::ClientCredentialsResponse,
         routes::PutApiKeyBody,
         routes::PutClientSecretBody,
         routes::PutGovernanceBody,
         routes::PostBillingLogBody,
+        routes::GatewayChatMessage,
+        routes::GatewayChatRequest,
+        routes::GatewayProvider,
+        routes::GatewayModelEnum,
         ApiError
     )),
     modifiers(&SecurityAddon),

@@ -10,10 +10,11 @@ pub struct ReqwestDispatcher {
     client: Client,
     openai_base: String,
     anthropic_base: String,
+    gemini_base: String,
 }
 
 impl ReqwestDispatcher {
-    pub fn new(openai_base: String, anthropic_base: String) -> Result<Self> {
+    pub fn new(openai_base: String, anthropic_base: String, gemini_base: String) -> Result<Self> {
         let client = Client::builder()
             .build()
             .map_err(|e| crate::AppError::Proxy(e.to_string()))?;
@@ -21,6 +22,7 @@ impl ReqwestDispatcher {
             client,
             openai_base,
             anthropic_base,
+            gemini_base,
         })
     }
 
@@ -28,6 +30,7 @@ impl ReqwestDispatcher {
         match provider {
             LlmProvider::OpenAI => &self.openai_base,
             LlmProvider::Anthropic => &self.anthropic_base,
+            LlmProvider::Gemini => &self.gemini_base,
         }
     }
 }

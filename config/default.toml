@@ -27,6 +27,7 @@ secret = "change-me-in-production"
 [llm]
 openai_base_url = "https://api.openai.com"
 anthropic_base_url = "https://api.anthropic.com"
+gemini_base_url = "https://generativelanguage.googleapis.com"
 
 [logging_worker]
 batch_max_size = 100
