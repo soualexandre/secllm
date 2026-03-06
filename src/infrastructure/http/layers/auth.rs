@@ -27,12 +27,33 @@ pub struct Claims {
     pub iat: Option<i64>,
 }
 
+/// Paths that must remain public (no Bearer required). Used for health and Swagger UI.
+fn is_public_path(path: &str) -> bool {
+    let path = path.trim();
+    if path.is_empty() {
+        return false;
+    }
+    // Exact or prefix matches
+    if path == "/"
+        || path == "/auth/token"
+        || path == "/auth/register"
+        || path == "/api/users/register"
+        || path.starts_with("/swagger-ui")
+        || path.starts_with("/api-docs")
+    {
+        return true;
+    }
+    // Fallback: any path used by Swagger/OpenAPI (in case of proxy prefix or encoding)
+    let lower = path.to_lowercase();
+    lower.contains("swagger-ui") || lower.contains("api-docs")
+}
+
 pub async fn auth_layer(
     request: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, String)> {
     let (mut parts, body) = request.into_parts();
-    if parts.uri.path() == "/" {
+    if is_public_path(parts.uri.path()) {
         return Ok(next.run(Request::from_parts(parts, body)).await);
     }
     let request_id = request_id_from_parts(&parts);

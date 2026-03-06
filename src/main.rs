@@ -1,6 +1,7 @@
 //! SecLLM – bootstrap: config, single RabbitMQ connection, AppState, worker spawn, serve.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use lapin::{Connection, ConnectionProperties};
 use sqlx::postgres::PgPoolOptions;
@@ -11,6 +12,22 @@ use secllm::infrastructure::logging::{worker, RabbitMqPublisher};
 use secllm::infrastructure::privacy::PrivacyService;
 use secllm::infrastructure::proxy::ReqwestDispatcher;
 use secllm::infrastructure::vault::RedisVault;
+
+/// Connect to RabbitMQ with retry (DNS/network may not be ready at startup in Docker/Colima).
+async fn connect_rabbitmq_with_retry(url: &str) -> Result<Connection, Box<dyn std::error::Error + Send + Sync>> {
+    let mut backoff = Duration::from_secs(1);
+    const MAX_BACKOFF: Duration = Duration::from_secs(30);
+    loop {
+        match Connection::connect(url, ConnectionProperties::default()).await {
+            Ok(conn) => return Ok(conn),
+            Err(e) => {
+                eprintln!("RabbitMQ connection failed (will retry in {:?}): {}", backoff, e);
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(MAX_BACKOFF);
+            }
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -29,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         None => None,
     };
 
-    let conn = Connection::connect(&config.rabbitmq.url, ConnectionProperties::default()).await?;
+    let conn = connect_rabbitmq_with_retry(&config.rabbitmq.url).await?;
     let channel = conn.create_channel().await?;
     RabbitMqPublisher::enable_confirms(&channel).await?;
     let logger = Arc::new(RabbitMqPublisher::new(
@@ -57,9 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         batch_max_latency_ms: config.logging_worker.batch_max_latency_ms,
     };
     tokio::spawn(async move {
-        if let Err(e) = worker::run_worker(worker_config).await {
-            eprintln!("audit worker error: {}", e);
-        }
+        worker::run_worker(worker_config).await
     });
 
     let app = router(state);

@@ -2,6 +2,7 @@
 
 pub mod extractors;
 pub mod layers;
+pub mod openapi;
 pub mod routes;
 pub mod state;
 

@@ -1,19 +1,16 @@
 # SecLLM – multi-stage build: Rust build + slim runtime
+# Single full build (no dummy main) to avoid corrupt rmeta between lapin/amq-protocol-uri and url.
 
 # ---- Build ----
-FROM rust:1-bookworm AS builder
+FROM rust:latest AS builder
 
 WORKDIR /app
 
-# Cache de dependências: copiar manifestos primeiro
+# Copy all source; one build avoids metadata mismatch (url/amq-protocol-uri)
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs && echo "pub fn dummy() {}" > src/lib.rs
-RUN cargo build --release && rm -rf src
-
-# Código fonte e build real
 COPY config ./config
 COPY src ./src
-RUN touch src/main.rs src/lib.rs && cargo build --release
+RUN cargo build --release
 
 # ---- Runtime ----
 FROM debian:bookworm-slim

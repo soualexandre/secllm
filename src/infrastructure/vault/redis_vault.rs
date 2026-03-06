@@ -59,7 +59,7 @@ impl VaultPort for RedisVault {
             .await
             .map_err(|e| crate::AppError::Vault(e.to_string()))?;
         let key = Self::key(client_id, provider);
-        conn.set::<_, ()>(&key, api_key)
+        conn.set::<_, _, ()>(&key, api_key)
             .await
             .map_err(|e| crate::AppError::Vault(e.to_string()))?;
         Ok(())
@@ -72,7 +72,7 @@ impl VaultPort for RedisVault {
             .await
             .map_err(|e| crate::AppError::Vault(e.to_string()))?;
         let key = Self::key(client_id, provider);
-        conn.del::<_, ()>(&key)
+        let _: () = conn.del(&key)
             .await
             .map_err(|e| crate::AppError::Vault(e.to_string()))?;
         Ok(())
@@ -85,7 +85,7 @@ impl VaultPort for RedisVault {
             .await
             .map_err(|e| crate::AppError::Vault(e.to_string()))?;
         let key = Self::auth_key(client_id);
-        conn.set::<_, ()>(&key, secret)
+        conn.set::<_, _, ()>(&key, secret)
             .await
             .map_err(|e| crate::AppError::Vault(e.to_string()))?;
         Ok(())
@@ -98,7 +98,7 @@ impl VaultPort for RedisVault {
             .await
             .map_err(|e| crate::AppError::Vault(e.to_string()))?;
         let key = Self::auth_key(client_id);
-        conn.del::<_, ()>(&key)
+        let _: () = conn.del(&key)
             .await
             .map_err(|e| crate::AppError::Vault(e.to_string()))?;
         Ok(())

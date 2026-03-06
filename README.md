@@ -54,23 +54,27 @@ O SecLLM utiliza **Arquitetura Hexagonal (Clean Architecture)** para garantir qu
     ```bash
     docker compose up -d --build
     ```
-    A API ficará em **http://localhost:3000**. Detalhes (incl. como configurar chaves no Redis) em [docker/README.md](docker/README.md).
+    A API ficará em **http://localhost:3010** (porta 3010 no host). Detalhes (incl. como configurar chaves no Redis) em [docker/README.md](docker/README.md).
 
-    *Alternativa:* subir só a infraestrutura com `docker compose up -d redis rabbitmq clickhouse` e rodar a aplicação localmente com `cargo run`.
+    *Alternativa:* subir só a infraestrutura e rodar a app no host (veja abaixo).
 
-3.  **Configure o ambiente (se rodar a app fora do Docker):**
-    Crie um arquivo `.env` na raiz:
-    ```env
-    SERVER_ADDR=0.0.0.0:3000
-    REDIS_URL=redis://127.0.0.1:6379
-    RABBIT_URL=amqp://guest:guest@127.0.0.1:5672
-    CLICKHOUSE_URL=http://localhost:8123
-    ```
+3.  **Rodar a aplicação localmente (`cargo run`):**
+    - Suba só os serviços de infraestrutura (as portas ficam expostas no host):
+      ```bash
+      docker compose up -d redis rabbitmq postgres clickhouse clickhouse-init
+      ```
+    - **Não** exporte no seu shell as variáveis de ambiente do Docker Compose (elas usam hostnames como `redis`, `rabbitmq`, que **não resolvem** no host e geram *"failed to lookup address information: Name or service not known"*).
+    - O `config/default.toml` já usa `127.0.0.1` para tudo. Se precisar sobrescrever, use `config/local.toml` ou variáveis `SECLLM__REDIS__URL`, `SECLLM__RABBITMQ__URL`, etc., sempre com **localhost/127.0.0.1**.
+    - Execute:
+      ```bash
+      cargo run --release
+      ```
+    - A API ficará em **http://localhost:3000**. Swagger: **http://localhost:3000/swagger-ui/**.
 
-4.  **Execute o servidor:**
-    ```bash
-    cargo run --release
-    ```
+4.  **Erros "Name or service not known" ou "Connection refused":**
+    - Significam que a aplicação está tentando conectar a Redis, RabbitMQ, ClickHouse ou Postgres em um host/porta inacessível.
+    - **Se estiver rodando no host:** use apenas `127.0.0.1` nas URLs e garanta que os containers da infraestrutura estão de pé (`docker compose ps`). Não use variáveis de ambiente com hostnames do Docker (`redis`, `rabbitmq`, etc.) no seu terminal.
+    - **Se estiver rodando no Docker:** o `docker-compose.yml` já define os hostnames corretos; garanta que todos os serviços estão na mesma rede e saudáveis.
 
 ---
 

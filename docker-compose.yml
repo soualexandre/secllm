@@ -2,6 +2,8 @@
 
 services:
   redis:
+    networks:
+      - secllm_net
     image: redis:7-alpine
     container_name: secllm-redis
     ports:
@@ -17,6 +19,8 @@ services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: secllm-rabbitmq
+    networks:
+      - secllm_net
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -38,6 +42,8 @@ services:
     image: clickhouse/clickhouse-server:24-alpine
     platform: linux/amd64
     container_name: secllm-clickhouse
+    networks:
+      - secllm_net
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -63,6 +69,8 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: secllm-postgres
+    networks:
+      - secllm_net
     environment:
       POSTGRES_USER: secllm
       POSTGRES_PASSWORD: secllm
@@ -81,6 +89,8 @@ services:
   clickhouse-init:
     image: curlimages/curl:latest
     container_name: secllm-clickhouse-init
+    networks:
+      - secllm_net
     depends_on:
       clickhouse:
         condition: service_started
@@ -107,8 +117,10 @@ services:
     build: .
     image: secllm:latest
     container_name: secllm-app
+    networks:
+      - secllm_net
     ports:
-      - "3000:3000"
+      - "3010:3000"
     environment:
       SECLLM__SERVER__HOST: "0.0.0.0"
       SECLLM__SERVER__PORT: "3000"
@@ -136,6 +148,10 @@ services:
       clickhouse-init:
         condition: service_completed_successfully
     restart: unless-stopped
+
+networks:
+  secllm_net:
+    driver: bridge
 
 volumes:
   redis_data:
