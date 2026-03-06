@@ -3,6 +3,9 @@
 //! Sem retentativas: em caso de erro na chamada ao provedor, a resposta de erro é retornada
 //! imediatamente. Gemini: usa endpoint generateContent e header x-goog-api-key; reescreve
 //! request/response quando path é chat/completions ou responses.
+//!
+//! TLS: reqwest usa o TLS nativo do sistema (melhor compatibilidade com Google). Timeout é só aqui;
+//! se houver proxy reverso na frente, configure timeout nele também.
 
 use std::time::Duration;
 
@@ -13,8 +16,8 @@ use crate::application::ports::ProxyPort;
 use crate::domain::{LlmProvider, RequestContext};
 use crate::Result;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 300; // 5 min (Gemini pode demorar em redes lentas)
 
 fn proxy_debug_enabled() -> bool {
     std::env::var("SECLLM_PROXY_DEBUG").as_deref() == Ok("1")
@@ -84,8 +87,8 @@ fn error_message_with_causes(e: &(dyn std::error::Error + 'static)) -> String {
 }
 
 /// Converte body no formato OpenAI (messages ou input) para o formato Gemini generateContent.
-/// Retorna (url_completa, body_json_bytes). URL = base + "/v1beta/models/MODEL:generateContent".
-fn openai_body_to_gemini(base: &str, body: &[u8]) -> Result<(String, Vec<u8>)> {
+/// Retorna (url_completa, body_json_bytes). URL = base + "/v1beta/models/MODEL:generateContent?key=API_KEY".
+fn openai_body_to_gemini(base: &str, body: &[u8], api_key: &str) -> Result<(String, Vec<u8>)> {
     let v: Value = serde_json::from_slice(body)
         .map_err(|e| crate::AppError::Proxy(format!("Gemini: body JSON inválido: {}", e)))?;
     let model = v
@@ -130,7 +133,7 @@ fn openai_body_to_gemini(base: &str, body: &[u8]) -> Result<(String, Vec<u8>)> {
         }
     });
     let path = format!("/v1beta/models/{}:generateContent", model);
-    let url = format!("{}{}", base.trim_end_matches('/'), path);
+    let url = format!("{}{}?key={}", base.trim_end_matches('/'), path, api_key);
     let body_bytes =
         serde_json::to_vec(&gemini_body).map_err(|e| crate::AppError::Proxy(e.to_string()))?;
     Ok((url, body_bytes))
@@ -175,13 +178,30 @@ pub struct ReqwestDispatcher {
     gemini_base: String,
 }
 
+fn connect_timeout() -> Duration {
+    std::env::var("SECLLM_PROXY_CONNECT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS))
+}
+
+fn request_timeout() -> Duration {
+    std::env::var("SECLLM_PROXY_REQUEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS))
+}
+
 impl ReqwestDispatcher {
     pub fn new(openai_base: String, anthropic_base: String, gemini_base: String) -> Result<Self> {
         let client = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(connect_timeout())
+            .timeout(request_timeout())
             .http1_only()
             .pool_max_idle_per_host(0)
+            .no_proxy()
             .build()
             .map_err(|e| crate::AppError::Proxy(e.to_string()))?;
         Ok(Self {
@@ -253,14 +273,51 @@ impl ReqwestDispatcher {
         } else {
             req.header("Authorization", format!("Bearer {}", ctx.api_key))
         };
+        // User-Agent evita bloqueio em alguns backends; sem Connection: close para compatibilidade com Google
         let req = req
             .header("Content-Type", "application/json")
-            .header("Connection", "close")
+            .header("User-Agent", "SecLLM-Proxy/1.0 (curl-compatible)")
             .body(body);
         filtered_headers
             .iter()
             .fold(req, |r, (k, v)| r.header(k.as_str(), v.as_str()))
     }
+}
+
+/// Mock ativo por padrão (quando SECLLM_MOCK_LLM não está definida). Desative com SECLLM_MOCK_LLM=0 ou false.
+/// Quando ativo, nenhuma chamada HTTP ao provedor é feita para rotas de gateway LLM.
+fn mock_llm_enabled() -> bool {
+    let v = std::env::var("SECLLM_MOCK_LLM").unwrap_or_else(|_| String::new());
+    let v = v.trim().to_lowercase();
+    if v.is_empty() {
+        return true; // padrão: mock ativo (não precisa exportar nada)
+    }
+    matches!(v.as_str(), "1" | "true" | "yes")
+}
+
+/// Resposta mock em formato OpenAI (chat completions / responses API) para testar pipeline sem chamar provedor real.
+/// Salva normalmente no audit (entrada + saída); no painel aparecem o prompt de entrada e esta resposta.
+fn mock_llm_response_body() -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "id": "mock-chatcmpl-000000000000000000000000",
+        "object": "chat.completion",
+        "created": chrono::Utc::now().timestamp(),
+        "model": "gpt-4o-mini-mock",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "[Mock] Resposta de IA para testes. Pipeline (privacidade, auditoria, moderação) executado normalmente. Entrada e saída são salvas no audit."
+            },
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30
+        }
+    }))
+    .unwrap_or_default()
 }
 
 #[async_trait]
@@ -277,11 +334,21 @@ impl ProxyPort for ReqwestDispatcher {
             return Err(crate::AppError::Proxy(format!("unsupported method {}", method)));
         }
 
+        let is_gateway_llm = method == "POST"
+            && (path.contains("chat/completions") || path.contains("responses") || path.ends_with("completions"));
+
+        // Mock: nunca chamar o provedor real. Ativo com SECLLM_MOCK_LLM=1 (ou true/yes) ou quando a api_key já é "mock" (vault).
+        let use_mock = ctx.api_key == "mock" || (mock_llm_enabled() && is_gateway_llm);
+        if use_mock && is_gateway_llm {
+            let body = mock_llm_response_body();
+            return Ok((200, body, Some(10), Some(20)));
+        }
+
         let base = self.base_url(ctx.provider);
         let (url, body) = if ctx.provider == LlmProvider::Gemini
             && (path.contains("chat/completions") || path.contains("responses"))
         {
-            let (gemini_url, gemini_body) = openai_body_to_gemini(&base, &body)?;
+            let (gemini_url, gemini_body) = openai_body_to_gemini(&base, &body, &ctx.api_key)?;
             (gemini_url, gemini_body)
         } else {
             (format!("{}{}", base.trim_end_matches('/'), path), body)

@@ -7,6 +7,7 @@ import { useGovernanceGlobal, usePutGovernanceGlobal } from "@/hooks/useGovernan
 const defaultPolicy = {
   mask_pii: [] as string[],
   mask_response: true,
+  block_on_pii: false,
   rate_limits: {},
   allowed_models: [] as string[],
   blocked_terms: [] as string[],
@@ -41,6 +42,9 @@ export function GovernanceView() {
         </TabsList>
         <TabsContent value="global" className="mt-4">
           <Card title="Global policy">
+            <p className="text-muted-foreground text-sm mb-3">
+              <code>mask_pii</code>: array of PII types to mask (e.g. &quot;Cpf&quot;, &quot;Rg&quot;, &quot;Cnpj&quot;, &quot;Name&quot;, &quot;Email&quot;, &quot;Phone&quot;, &quot;Secret&quot;). <code>block_on_pii</code>: if true, requests containing these PII are rejected (400) instead of masked.
+            </p>
             {isLoading && <p className="text-muted-foreground text-sm">Loading…</p>}
             {isError && <p className="text-danger text-sm">Failed to load policy.</p>}
             {!isLoading && !isError && (

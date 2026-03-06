@@ -24,7 +24,8 @@ async function proxy(
   method: string
 ): Promise<NextResponse> {
   const pathname = path.join("/");
-  const url = `${API_URL}/${pathname}`;
+  const search = request.nextUrl.searchParams.toString();
+  const url = search ? `${API_URL}/${pathname}?${search}` : `${API_URL}/${pathname}`;
   const token = request.cookies.get("secllm_token")?.value;
 
   const headers: Record<string, string> = {

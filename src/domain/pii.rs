@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PiiKind {
     Cpf,
+    Rg,
+    Cnpj,
     Name,
     Email,
     Phone,
@@ -25,6 +27,8 @@ impl PiiMatch {
     pub fn replacement(&self) -> String {
         match self.kind {
             PiiKind::Cpf => "***.***.***-**".to_string(),
+            PiiKind::Rg => "**[RG]**".to_string(),
+            PiiKind::Cnpj => "**.***.***/****-**".to_string(),
             PiiKind::Name => "[NOME]".to_string(),
             PiiKind::Email => "***@***.***".to_string(),
             PiiKind::Phone => "****-****".to_string(),

@@ -1,9 +1,10 @@
 //! Route definitions and proxy handler.
 
 use axum::{
-    extract::{Path as AxumPath, State},
+    body::Body,
+    extract::{Path as AxumPath, Query, State},
     http::{HeaderMap, Method, StatusCode, Uri},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{any, get, post, put},
     Json, Router,
 };
@@ -21,6 +22,7 @@ use utoipa::OpenApi;
 
 use crate::application::pipeline;
 use crate::error::AppError;
+use crate::infrastructure::clickhouse::{self, LogEntry, MetricsResponse};
 use crate::infrastructure::http::openapi::ApiDoc;
 use crate::infrastructure::http::extractors::Context;
 use crate::infrastructure::http::layers::auth::Claims;
@@ -84,6 +86,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/governance/global", axum::routing::get(get_governance_global).put(put_governance_global))
         .route("/governance/clients/:client_id", axum::routing::get(get_governance_client).put(put_governance_client))
         .route("/billing/logs", axum::routing::post(post_billing_log))
+        .route("/logs", get(get_logs))
+        .route("/metrics", get(get_metrics))
         .route_layer(middleware::from_fn(layers::auth::auth_layer));
 
     let proxy_routes = Router::new()
@@ -428,6 +432,38 @@ fn can_manage_client(
 
 fn parse_provider(provider: &str) -> Option<crate::domain::LlmProvider> {
     crate::domain::LlmProvider::from_str(provider)
+}
+
+/// Resolve governance policy for proxy: client scope first, then global, then default. Call only when Postgres is configured.
+async fn resolve_governance_policy_for_proxy(
+    pool: &sqlx::PgPool,
+    default: &crate::domain::GovernancePolicy,
+    vault_client_id: &str,
+) -> crate::domain::GovernancePolicy {
+    if let Ok((client_uuid, _)) = resolve_client(pool, vault_client_id).await {
+        let row: Option<(serde_json::Value,)> = sqlx::query_as(
+            "SELECT policy FROM governance_policies WHERE scope = 'client' AND client_id = $1 LIMIT 1",
+        )
+        .bind(client_uuid)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some((ref p,)) = row {
+            return crate::domain::GovernancePolicy::from_json_value(p);
+        }
+    }
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT policy FROM governance_policies WHERE scope = 'global' AND client_id IS NULL LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    if let Some((ref p,)) = row {
+        return crate::domain::GovernancePolicy::from_json_value(p);
+    }
+    default.clone()
 }
 
 /// Resposta de GET /api/v1/me (dados do usuário autenticado com email+senha).
@@ -1069,6 +1105,92 @@ pub async fn post_billing_log(
     Ok(StatusCode::CREATED)
 }
 
+/// Query params para GET /api/v1/logs (filtros, ordenação, paginação).
+#[derive(serde::Deserialize)]
+pub struct LogsQuery {
+    #[serde(default = "default_logs_limit")]
+    pub limit: u32,
+    #[serde(default)]
+    pub offset: u32,
+    pub client_id: Option<String>,
+    pub provider: Option<String>,
+    pub status: Option<String>,
+    pub sort: Option<String>,
+    pub order: Option<String>,
+}
+fn default_logs_limit() -> u32 {
+    100
+}
+
+/// Resposta de GET /api/v1/logs (itens + total para paginação).
+#[derive(serde::Serialize)]
+pub struct LogsResponse {
+    pub items: Vec<LogEntry>,
+    pub total: u64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/logs",
+    params(("limit" = Option<u32>, Query, description = "Máximo de linhas (default 100)"), ("offset" = Option<u32>, Query, description = "Offset para paginação")),
+    responses((status = 200, description = "Lista de logs de auditoria", body = LogsResponse), (status = 503, description = "ClickHouse indisponível")),
+    security(("bearer_auth" = [])),
+    tag = "Logs e métricas"
+)]
+pub async fn get_logs(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<LogsQuery>,
+) -> Result<Json<LogsResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let (client, table) = state
+        .clickhouse
+        .as_ref()
+        .ok_or_else(|| api_err(StatusCode::SERVICE_UNAVAILABLE, "ClickHouse not configured"))?;
+    let limit = q.limit.min(500);
+    let params = clickhouse::LogsQueryParams {
+        client_id: q.client_id,
+        provider: q.provider,
+        status: q.status,
+        sort: q.sort,
+        order: q.order,
+    };
+    let (items, total) = clickhouse::query_logs(client, table, limit, q.offset, &params)
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("ClickHouse error: {}", e)))?;
+    Ok(Json(LogsResponse { items, total }))
+}
+
+/// Query params para GET /api/v1/metrics (filtrar por provider e/ou status).
+#[derive(serde::Deserialize, Default)]
+pub struct MetricsQuery {
+    pub provider: Option<String>,
+    pub status: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/metrics",
+    responses((status = 200, description = "Métricas agregadas de auditoria", body = MetricsResponse), (status = 503, description = "ClickHouse indisponível")),
+    security(("bearer_auth" = [])),
+    tag = "Logs e métricas"
+)]
+pub async fn get_metrics(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<MetricsQuery>,
+) -> Result<Json<MetricsResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let (client, table) = state
+        .clickhouse
+        .as_ref()
+        .ok_or_else(|| api_err(StatusCode::SERVICE_UNAVAILABLE, "ClickHouse not configured"))?;
+    let params = clickhouse::MetricsQueryParams {
+        provider: q.provider,
+        status: q.status,
+    };
+    let metrics = clickhouse::query_metrics(client, table, &params)
+        .await
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("ClickHouse error: {}", e)))?;
+    Ok(Json(metrics))
+}
+
 // ---- Governance policies API ----
 
 #[utoipa::path(
@@ -1095,7 +1217,7 @@ pub async fn get_governance_global(
     .await
     .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     Ok(Json(
-        row.map(|(p,)| p).unwrap_or(serde_json::json!({ "mask_pii": [], "mask_response": true })),
+        row.map(|(p,)| p).unwrap_or(serde_json::json!({ "mask_pii": [], "mask_response": true, "block_on_pii": false })),
     ))
 }
 
@@ -1181,7 +1303,7 @@ pub async fn get_governance_client(
     .await
     .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("database error: {}", e)))?;
     Ok(Json(
-        row.map(|(p,)| p).unwrap_or(serde_json::json!({ "mask_pii": [], "mask_response": true })),
+        row.map(|(p,)| p).unwrap_or(serde_json::json!({ "mask_pii": [], "mask_response": true, "block_on_pii": false })),
     ))
 }
 
@@ -1369,8 +1491,45 @@ async fn proxy_handler(
         .map(|p| p.as_str())
         .unwrap_or(path);
 
+    // GET /v1/responses não é suportado (Responses API é POST). Retorna 405 em vez de encaminhar e receber 404.
+    if method == Method::GET && (path.contains("/v1/responses") || path.ends_with("responses")) {
+        return Ok((
+            StatusCode::METHOD_NOT_ALLOWED,
+            Json(serde_json::json!({ "error": "Method Not Allowed. Use POST /v1/responses with JSON body (model, input or messages)." })),
+        )
+            .into_response());
+    }
+
     let is_gateway_llm = method == Method::POST
         && (path.contains("chat/completions") || path.contains("/v1/responses") || path.ends_with("completions"));
+
+    if is_gateway_llm {
+        if body.is_empty() {
+            return Err(AppError::BadRequest(
+                "Body is required. Use JSON with 'model' and 'input' (for /v1/responses) or 'messages' (for /v1/chat/completions). Optional: client_id, provider.".into(),
+            ));
+        }
+        let value: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
+            AppError::BadRequest(format!("Body must be valid JSON: {}", e))
+        })?;
+        let obj = value.as_object().ok_or_else(|| {
+            AppError::BadRequest("Body must be a JSON object".into())
+        })?;
+        if path.contains("/v1/responses") {
+            let has_input = obj.get("input").and_then(|v| v.as_str()).map(|s| !s.trim().is_empty()).unwrap_or(false);
+            let has_messages = obj.get("messages").and_then(|m| m.as_array()).map(|a| !a.is_empty()).unwrap_or(false);
+            if !has_input && !has_messages {
+                return Err(AppError::BadRequest(
+                    "For POST /v1/responses the body must include 'input' (string) or 'messages' (array)".into(),
+                ));
+            }
+        }
+        if !obj.contains_key("model") {
+            return Err(AppError::BadRequest(
+                "Body must include 'model' (e.g. gpt-4o-mini, gemini-1.5-flash)".into(),
+            ));
+        }
+    }
 
     let (client_id_for_vault, provider_override, body_to_forward) = if is_gateway_llm {
         if let Some((cid, prov, body_clean)) = normalize_gateway_body(&body) {
@@ -1420,11 +1579,15 @@ async fn proxy_handler(
         .as_deref()
         .and_then(|s| parse_provider(s).map(|p| p.as_str()))
         .unwrap_or_else(|| partial_ctx.provider.as_str());
-    let api_key = state
-        .vault
-        .get_api_key(vault_client_id, provider_str)
-        .await?;
     let provider_enum = parse_provider(provider_str).unwrap_or(partial_ctx.provider);
+    let api_key = if std::env::var("SECLLM_MOCK_LLM").as_deref() == Ok("1") && is_gateway_llm {
+        String::from("mock")
+    } else {
+        state
+            .vault
+            .get_api_key(vault_client_id, provider_str)
+            .await?
+    };
     let ctx = crate::domain::RequestContext {
         client_id: vault_client_id.to_string(),
         api_key,
@@ -1446,6 +1609,14 @@ async fn proxy_handler(
         })
         .collect();
 
+    let policy = match state.postgres.as_ref() {
+        None => None,
+        Some(pool) => Some(
+            resolve_governance_policy_for_proxy(pool, &state.governance, vault_client_id).await,
+        ),
+    };
+    let policy_ref = policy.as_ref();
+
     let (status, body_bytes, _pt, _ct) = pipeline::handle_request(
         &ctx,
         method.as_str(),
@@ -1455,11 +1626,15 @@ async fn proxy_handler(
         state.logger.as_ref(),
         state.proxy.as_ref(),
         state.privacy.as_ref(),
+        policy_ref,
     )
     .await?;
 
     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    Ok((status, Bytes::from(body_bytes)))
+    Ok(Response::builder()
+        .status(status)
+        .body(Body::from(body_bytes))
+        .unwrap())
 }
 
 /// Extract client_id and provider from JSON body (if present), remove them and force stream=false,

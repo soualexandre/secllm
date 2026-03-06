@@ -77,7 +77,13 @@ O SecLLM utiliza **Arquitetura Hexagonal (Clean Architecture)** para garantir qu
       ```
     - A API ficará em **http://localhost:3000**. Swagger: **http://localhost:3000/swagger-ui/**.
 
-4.  **Erros "Name or service not known" ou "Connection refused":**
+4.  **Mock LLM (padrão):** Por padrão o gateway **não chama** o provedor real: as respostas são simuladas (formato OpenAI) e entrada/saída são salvas no audit. Basta `cargo run` (não é preciso exportar nada). Para usar a API real (OpenAI, etc.), desative o mock:
+    ```bash
+    SECLLM_MOCK_LLM=0 cargo run
+    ```
+    Valores que ativam mock: `1`, `true`, `yes` (ou variável não definida). Valores que desativam: `0`, `false`, `no`.
+
+5.  **Erros "Name or service not known" ou "Connection refused":**
     - Significam que a aplicação está tentando conectar a Redis, RabbitMQ, ClickHouse ou Postgres em um host/porta inacessível.
     - **Se estiver rodando no host:** use apenas `127.0.0.1` nas URLs e garanta que os containers da infraestrutura estão de pé (`docker compose ps`). Não use variáveis de ambiente com hostnames do Docker (`redis`, `rabbitmq`, etc.) no seu terminal.
     - **Se estiver rodando no Docker:** o `docker-compose.yml` já define os hostnames corretos; garanta que todos os serviços estão na mesma rede e saudáveis.

@@ -7,3 +7,4 @@ export type {
   ClientCredentials,
 } from "./clients";
 export type { GovernancePolicy } from "./governance";
+export type { LogEntry, LogsResponse, MetricsResponse } from "./logs";

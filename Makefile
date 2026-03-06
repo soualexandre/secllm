@@ -1,10 +1,11 @@
-# SecLLM – atalhos para Docker Compose (dev e prod)
-# Uso: make dev | make prod | make down
+# SecLLM – atalhos para Docker Compose (dev, prod, só infra)
+# Uso: make infra + cargo run (app local) | make dev (tudo no Docker)
 
-COMPOSE_BASE  := -f docker-compose.yml
-COMPOSE_DEV   := -f docker-compose.yml -f docker-compose.dev.yml
+COMPOSE_BASE   := -f docker-compose.yml
+COMPOSE_DEV    := -f docker-compose.yml -f docker-compose.dev.yml
+COMPOSE_INFRA  := -f docker-compose.infra.yml
 
-.PHONY: dev dev-build dev-down prod prod-build prod-down down logs help
+.PHONY: dev dev-build dev-down prod prod-build prod-down infra infra-down down logs help
 
 # --- Desenvolvimento (hot-reload com cargo-watch) ---
 dev:
@@ -28,6 +29,15 @@ prod-build:
 prod-down:
 	@docker-compose $(COMPOSE_BASE) down
 
+# --- Só infraestrutura (app roda local: cargo run + front) ---
+infra:
+	$(info Subindo só Redis, RabbitMQ, Postgres, ClickHouse... Rode o backend: cargo run)
+	@docker-compose $(COMPOSE_INFRA) up -d
+	@echo "Infra no ar. Backend: cargo run (porta 3000). Front: cd secllm-front && npm run dev."
+
+infra-down:
+	@docker-compose $(COMPOSE_INFRA) down
+
 # --- Comandos comuns ---
 down:
 	@docker-compose $(COMPOSE_DEV) down
@@ -41,6 +51,8 @@ logs-dev:
 # --- Ajuda ---
 help:
 	@echo "SecLLM – alvos disponíveis:"
+	@echo "  make infra      Só infra no Docker (Redis, RabbitMQ, Postgres, ClickHouse). Depois: cargo run"
+	@echo "  make infra-down Parar só a infra"
 	@echo "  make dev        Subir em desenvolvimento (hot-reload, foreground)"
 	@echo "  make dev-build  Apenas build da imagem de dev (sem subir)"
 	@echo "  make dev-down   Parar e remover containers do modo dev"

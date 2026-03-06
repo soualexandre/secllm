@@ -1,7 +1,7 @@
 //! Ports (traits) for infrastructure adapters – vault, logger, proxy, privacy.
 
 use async_trait::async_trait;
-use crate::domain::{AuditEvent, MaskedSpan, RequestContext};
+use crate::domain::{AuditEvent, GovernancePolicy, MaskedSpan, RequestContext};
 use crate::Result;
 
 /// Retrieve LLM API key for a client from the vault (e.g. Redis).
@@ -47,4 +47,10 @@ pub trait ProxyPort: Send + Sync {
 /// Scan text for PII/secrets and return masked text + spans.
 pub trait PrivacyPort: Send + Sync {
     fn scan_and_mask(&self, text: &str) -> Result<(String, Vec<MaskedSpan>)>;
+
+    /// Scan and mask using the given policy (e.g. from DB per request).
+    fn scan_and_mask_with_policy(&self, text: &str, policy: &GovernancePolicy) -> Result<(String, Vec<MaskedSpan>)>;
+
+    /// Detect PII that would be masked by policy (for block_on_pii check). Does not modify text.
+    fn detect_with_policy(&self, text: &str, policy: &GovernancePolicy) -> Result<Vec<MaskedSpan>>;
 }

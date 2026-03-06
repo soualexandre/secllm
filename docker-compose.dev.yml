@@ -1,6 +1,6 @@
 # SecLLM – desenvolvimento com auto-reload (cargo watch)
 # Uso: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
-# Ou: docker compose --profile dev up --build  (se o profile estiver no principal)
+# Se o link falhar com "ld terminated with signal 9 [Killed]", é OOM: dê mais RAM ao Docker/Colima (ex.: colima start --memory 6).
 
 services:
   secllm:
@@ -13,6 +13,9 @@ services:
       - .:/app
       - secllm_target:/app/target
     environment:
+      # Reduz uso de RAM na compilação/link (evita OOM no container)
+      CARGO_BUILD_JOBS: "1"
+      RUSTFLAGS: "-C codegen-units=1"
       SECLLM__SERVER__HOST: "0.0.0.0"
       SECLLM__SERVER__PORT: "3000"
       SECLLM__REDIS__URL: "redis://redis:6379"

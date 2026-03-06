@@ -71,7 +71,9 @@ export function useTheme(): { theme: Theme; setTheme: (t: Theme) => void } {
     themeStore.init();
     setValue(themeStore.getTheme());
     const unsub = themeStore.subscribe(() => setValue(themeStore.getTheme()));
-    return unsub;
+    return () => {
+      unsub();
+    };
   }, []);
 
   return {

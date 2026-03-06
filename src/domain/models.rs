@@ -56,7 +56,11 @@ pub struct MaskedSpan {
     pub replacement: String,
 }
 
+/// Tamanho máximo do body (request/response) armazenado no audit (evita mensagens gigantes).
+const MAX_BODY_LEN: usize = 200_000;
+
 /// Audit event sent to the logging pipeline (RabbitMQ → Worker → ClickHouse).
+/// Inclui entrada (request body) e saída (response body) para auditoria completa.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditEvent {
     pub request_id: Uuid,
@@ -67,6 +71,12 @@ pub struct AuditEvent {
     pub completion_tokens: Option<u32>,
     pub latency_ms: Option<u64>,
     pub status: String,
+    pub input_size: Option<u64>,
+    pub output_size: Option<u64>,
+    /// Body da requisição (já mascarado por privacy). Truncado a MAX_BODY_LEN.
+    pub request_body: Option<String>,
+    /// Body da resposta LLM (já mascarado). Truncado a MAX_BODY_LEN.
+    pub response_body: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -80,7 +90,13 @@ impl AuditEvent {
         completion_tokens: Option<u32>,
         latency_ms: Option<u64>,
         status: String,
+        input_size: Option<u64>,
+        output_size: Option<u64>,
+        request_body: Option<String>,
+        response_body: Option<String>,
     ) -> Self {
+        let request_body = request_body.map(|s| truncate_str(&s, MAX_BODY_LEN));
+        let response_body = response_body.map(|s| truncate_str(&s, MAX_BODY_LEN));
         Self {
             request_id,
             client_id,
@@ -90,8 +106,20 @@ impl AuditEvent {
             completion_tokens,
             latency_ms,
             status,
+            input_size,
+            output_size,
+            request_body,
+            response_body,
             created_at: Utc::now(),
         }
+    }
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}... [truncado {} chars]", &s[..max], s.len() - max)
     }
 }
 

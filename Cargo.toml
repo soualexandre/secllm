@@ -15,6 +15,7 @@ anyhow = "1.0"
 config = "0.14"
 redis = { version = "0.24", features = ["tokio-comp"] }
 lapin = "2.3"
+# TLS nativo do sistema (macOS: Security Framework; Linux: OpenSSL). Melhor compatibilidade com Google/corporativo que rustls.
 reqwest = { version = "0.11", features = ["json", "stream"] }
 jsonwebtoken = "9.2"
 clickhouse = "0.11"

@@ -1,12 +1,13 @@
 [server]
 host = "0.0.0.0"
-port = 3000
+port = 3010
 
 [redis]
 url = "redis://127.0.0.1:6379"
 
 [rabbitmq]
-url = "amqp://guest:guest@127.0.0.1:5672/%2f"
+# Use secllm:secllm quando a infra estiver no Docker (definitions.json); guest:guest para RabbitMQ local padrão
+url = "amqp://secllm:secllm@127.0.0.1:5672/%2f"
 audit_exchange = "secllm.audit"
 audit_queue = "secllm.audit.logs"
 audit_routing_key = "audit.log"
@@ -17,7 +18,8 @@ database = "secllm"
 audit_table = "audit_events"
 
 [postgres]
-url = "postgres://127.0.0.1:5432/secllm"
+# Porta 5433 para não conflitar com Postgres local (5432). Infra Docker expõe 5433.
+url = "postgres://secllm:secllm@127.0.0.1:5433/secllm"
 
 [jwt]
 secret = "change-me-in-production"

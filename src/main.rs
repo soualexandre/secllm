@@ -56,6 +56,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.rabbitmq.audit_routing_key.clone(),
     ));
 
+    let clickhouse = {
+        let client = clickhouse::Client::default()
+            .with_url(&config.clickhouse.url)
+            .with_database(&config.clickhouse.database);
+        Some((client, config.clickhouse.audit_table.clone()))
+    };
+
     let state = Arc::new(AppState {
         vault,
         logger,
@@ -63,6 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         privacy,
         governance,
         postgres,
+        clickhouse,
     });
 
     let worker_config = worker::WorkerConfig {

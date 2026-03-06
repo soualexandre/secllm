@@ -16,7 +16,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY config ./config
 COPY src ./src
 
-# Primeira compilação (em seguida o volume sobrescreve e cargo watch recompila ao mudar)
-RUN cargo build 2>/dev/null || true
+# Reduz uso de RAM no link (evita OOM em VMs com pouca memória)
+ENV CARGO_BUILD_JOBS=1 RUSTFLAGS="-C codegen-units=1"
+# Sem RUN cargo build: camada pesada causa I/O error ao commit no BuildKit. Primeira compilação ao subir o container.
 
 CMD ["cargo", "watch", "-x", "run", "-w", "src", "-w", "config", "-w", "Cargo.toml"]

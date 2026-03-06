@@ -7,6 +7,14 @@ use std::sync::LazyLock;
 static CPF_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b").unwrap()
 });
+// RG: XX.XXX.XXX-X or XXXXXXXX-X (8–9 digits + optional check digit)
+static RG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b\d{1,2}\.?\d{3}\.?\d{3}-?[\dXx]?\b").unwrap()
+});
+// CNPJ: 14 digits with optional punctuation XX.XXX.XXX/XXXX-XX
+static CNPJ_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b").unwrap()
+});
 static EMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap()
 });
@@ -28,6 +36,22 @@ impl PiiDetector {
                 start: m.start(),
                 end: m.end(),
                 kind: PiiKind::Cpf,
+                raw: m.as_str().to_string(),
+            });
+        }
+        for m in RG_RE.find_iter(text) {
+            out.push(PiiMatch {
+                start: m.start(),
+                end: m.end(),
+                kind: PiiKind::Rg,
+                raw: m.as_str().to_string(),
+            });
+        }
+        for m in CNPJ_RE.find_iter(text) {
+            out.push(PiiMatch {
+                start: m.start(),
+                end: m.end(),
+                kind: PiiKind::Cnpj,
                 raw: m.as_str().to_string(),
             });
         }

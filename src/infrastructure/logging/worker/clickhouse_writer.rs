@@ -19,6 +19,10 @@ pub struct AuditRow {
     completion_tokens: Option<u32>,
     latency_ms: Option<u64>,
     status: String,
+    input_size: Option<u64>,
+    output_size: Option<u64>,
+    request_body: String,
+    response_body: String,
     created_at: String,
 }
 
@@ -173,6 +177,10 @@ async fn insert_batch(
             completion_tokens: e.completion_tokens,
             latency_ms: e.latency_ms,
             status: e.status.clone(),
+            input_size: e.input_size,
+            output_size: e.output_size,
+            request_body: e.request_body.clone().unwrap_or_default(),
+            response_body: e.response_body.clone().unwrap_or_default(),
             created_at: e.created_at.to_rfc3339(),
         })
         .collect();

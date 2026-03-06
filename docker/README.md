@@ -26,6 +26,38 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 - O cache de compilação fica no volume `secllm_target`, para não perder entre reinícios.
 - Deixe o comando rodando no terminal para ver os logs; ao editar e salvar, a recompilação e o restart aparecem ali.
 
+### Só infraestrutura (app e front no Mac, sem container Rust)
+
+Útil quando o disco é pouco ou o link no container dá OOM. Docker sobe só Redis, RabbitMQ, Postgres e ClickHouse; o backend e o front rodam no host.
+
+```bash
+make infra
+```
+
+Depois, em terminais separados:
+
+```bash
+# Backend (porta 3000)
+cargo run
+
+# Front (Next.js)
+cd secllm-front && npm run dev
+```
+
+O `config/default.toml` já usa `127.0.0.1` para todos os serviços, porta **3010** para o backend e **5433** para Postgres (evita conflito com Postgres local em 5432). Para derrubar a infra: `make infra-down`.
+
+Se aparecer **"database \"secllm\" does not exist"**, crie o banco (volume antigo sem o DB) e suba de novo:
+
+```bash
+docker exec secllm-postgres psql -U secllm -d postgres -c "CREATE DATABASE secllm;"
+# Depois rode os scripts de schema (uma vez):
+docker exec -i secllm-postgres psql -U secllm -d secllm < docker/postgres/01_schema.sql
+docker exec -i secllm-postgres psql -U secllm -d secllm < docker/postgres/02_rls.sql
+docker exec -i secllm-postgres psql -U secllm -d secllm < docker/postgres/03_add_gemini.sql
+```
+
+---
+
 Para subir só a infra e o app em modo dev em background (não recomendado, pois você não vê o cargo watch):
 
 ```bash
